@@ -1,0 +1,31 @@
+{
+  "name": "social-engagement-automation",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Semi-automated social media engagement pipeline (Reddit/Facebook/Instagram) for Hon Kwok",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "discover": "tsx scripts/discover.ts",
+    "post": "tsx agents/worker.ts",
+    "login": "tsx agents/login.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.68.0",
+    "better-sqlite3": "^12.4.1",
+    "dotenv": "^17.2.0",
+    "googleapis": "^161.0.0",
+    "next": "^15.5.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.11",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.1.0",
+    "playwright": "^1.56.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0"
+  }
+}

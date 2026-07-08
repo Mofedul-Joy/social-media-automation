@@ -1,0 +1,22 @@
+# dependencies / build
+node_modules/
+.next/
+tsconfig.tsbuildinfo
+next-env.d.ts
+
+# secrets & credentials — never commit
+.env
+.env.*
+!.env.template
+config/google-service-account.json
+
+# client-specific config (public repo) — keep the example, not the real brief
+config/business_context.json
+
+# runtime data: logged-in chrome session cookies + SQLite queue — never commit
+data/
+
+# local agent scratch / misc
+.impeccable/
+*.log
+.DS_Store

@@ -1,0 +1,27 @@
+{
+  "business_name": "Example Co",
+  "description": "One-paragraph description of the business, what it sells, and who it helps. This is the core instruction the AI uses to judge relevance and write comments.",
+  "target_audience": "Who the ideal person to engage with is (e.g. small e-commerce owners evaluating fulfillment tools).",
+  "keywords": ["keyword one", "keyword two", "topic three"],
+  "comment_tone": "Helpful, peer-to-peer, never salesy. Sound like a knowledgeable person in the community, not a brand. No links unless directly asked.",
+  "avoid": ["do not pitch the product directly", "do not comment on politics", "do not argue"],
+  "platforms": {
+    "reddit": {
+      "enabled": true,
+      "subreddits": ["examplesubreddit", "anothersubreddit"],
+      "search_terms": ["keyword one", "topic three"]
+    },
+    "facebook": {
+      "enabled": false,
+      "pages": [],
+      "groups": [],
+      "search_terms": []
+    },
+    "instagram": {
+      "enabled": false,
+      "hashtags": [],
+      "search_terms": []
+    }
+  },
+  "relevance_threshold": 0.6
+}
