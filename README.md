@@ -26,14 +26,14 @@ Chrome that posts comments also reads each platform's native search/feed:
   now 403s from plain servers, so we read it inside the browser session).
 - **Facebook / Instagram** — rendered post text from in-app search/hashtag pages (DOM).
 
-- **Layer 1 – directive:** `../directives/build_social_engagement_system.md`
+- **Layer 1 – directive:** `./directives/build_social_engagement_system.md`
 - **Layer 2 – orchestration:** the dashboard (`app/`) + posting worker (`agents/worker.ts`)
 - **Layer 3 – execution:** deterministic modules in `lib/` + posting agents in `agents/`
 
 ## Setup
 
 ```bash
-cd social-engagement-automation
+cd Hon-SMA
 npm install
 npx playwright install chrome        # real Chrome — used for BOTH discovery and posting
 cp .env.template .env                 # set ANTHROPIC_API_KEY, DASHBOARD_PASSWORD, etc.

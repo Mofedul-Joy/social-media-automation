@@ -20,3 +20,6 @@ data/
 .impeccable/
 *.log
 .DS_Store
+
+# app secrets (SSH keys, tokens)
+secrets/

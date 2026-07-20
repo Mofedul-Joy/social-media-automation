@@ -1,0 +1,152 @@
+{
+  "project_title": "Social Media Engagement Automation System",
+  "client_name": "Hon Kwok",
+  "scope": {
+    "overview": "This system automates social media engagement across Reddit, Facebook, and Instagram for your business. You define a topic or business context, the system searches all three platforms for relevant recent conversations, uses AI to analyze which posts are worth engaging, generates contextual comments for each, and surfaces them in a web dashboard for your review and approval.\n\nOnce you approve a comment in the dashboard, the system automatically logs into your social media account and posts it using browser automation, exactly as a human user would. No third-party APIs that expose your activity or add cost. The result is a semi-automated engagement pipeline that finds the right conversations, drafts the right replies, and lets you stay in control of what actually gets posted.",
+    "steps": [
+      "Define your business context: product, target audience, keywords to monitor, and preferred reply tone, stored as persistent AI instructions",
+      "Set up the web scraping layer using Firecrawl or a comparable tool to pull recent public posts from Reddit, Facebook, and Instagram based on your chosen topic",
+      "Build the AI relevance filter: Claude analyzes each scraped post and scores it for relevance, discarding noise and only surfacing posts that match your engagement criteria",
+      "Build the comment generation engine: for each approved post, Claude drafts a natural, contextual reply in the tone and voice you specify",
+      "Build the web dashboard on Vercel: a clean interface showing matched posts with their source platform, a short AI summary, category tags, and the generated comment alongside an Approve or Skip action",
+      "Build the Reddit posting agent using Chrome DevTools MCP: when a comment is approved, the system opens a browser, navigates to the Reddit post, and submits the comment from your account",
+      "Build the Facebook posting agent using Chrome DevTools MCP: same flow for Facebook, navigating to the post and submitting the comment through the Facebook UI",
+      "Build the Instagram posting agent using Chrome DevTools MCP: same flow for Instagram comments and replies",
+      "Set up VPS hosting and a static proxy IP so the browser automation always operates from a consistent location, preventing account flags from IP changes",
+      "Build the activity log: every post found, match decision, generated comment, approval status, and posting timestamp is recorded to a Google Sheet after each run",
+      "Run end-to-end tests across all three platforms, tune the relevance scoring and comment prompts through real runs, and hand over a stable, production-ready system"
+    ],
+    "architecture": "The system uses a three-layer design: a scraping layer that collects raw posts, an AI layer that filters and generates comments, and a browser automation layer that posts approved comments. All browser interactions happen through Chrome DevTools MCP running on a VPS with a static proxy IP."
+  },
+  "feasibility_components": [
+    {"name": "Reddit Scraping and Posting", "risk": "LOW", "note": "Reddit's public post structure is well-suited for scraping; browser-based posting is reliable and low-risk"},
+    {"name": "Facebook Scraping and Posting", "risk": "MEDIUM", "note": "Public Facebook content is accessible; browser automation works well but requires careful human-like pacing to avoid detection"},
+    {"name": "Instagram Scraping and Posting", "risk": "MEDIUM", "note": "Public Instagram posts are scrapable; comment posting via browser automation requires account warm-up and cautious rate limits"},
+    {"name": "AI Relevance Filtering", "risk": "LOW", "note": "Claude performs well at relevance scoring with a well-defined business context prompt"},
+    {"name": "Web Dashboard on Vercel", "risk": "LOW", "note": "Standard Next.js deployment; approval workflow is straightforward to implement"},
+    {"name": "VPS + Static Proxy Setup", "risk": "LOW", "note": "Dedicated IP proxy prevents account flags from IP inconsistency; well-established setup pattern"}
+  ],
+  "workflows": [
+    {
+      "title": "Post Discovery Pipeline",
+      "type": "pipeline",
+      "steps": [
+        {"label": "Topic Input", "sublabel": "Business context and keywords"},
+        {"label": "Scraping Layer", "sublabel": "Firecrawl pulls recent posts"},
+        {"label": "AI Relevance Filter", "sublabel": "Claude scores each post"},
+        {"label": "Category Tagging", "sublabel": "New buyer, complaint, question, etc."},
+        {"label": "Dashboard Display", "sublabel": "Filtered posts appear for review"},
+        {"label": "Activity Log", "sublabel": "All results written to Google Sheets"}
+      ],
+      "notes": "Runs on-demand or on a scheduled trigger; multiple Chrome instances can run in parallel for faster coverage across all three platforms."
+    },
+    {
+      "title": "Approval and Posting Workflow",
+      "type": "horizontal",
+      "steps": [
+        {"label": "Review Post", "sublabel": "AI summary + generated comment"},
+        {"label": "Approve or Skip", "sublabel": "One-click in dashboard"},
+        {"label": "Browser Opens", "sublabel": "Chrome DevTools MCP"},
+        {"label": "Comment Posted", "sublabel": "From your account"},
+        {"label": "Log Updated", "sublabel": "Timestamp + result recorded"}
+      ],
+      "notes": "You stay in full control of what gets posted. No comment goes live without your explicit approval."
+    },
+    {
+      "title": "Multi-Platform Orchestration",
+      "type": "horizontal",
+      "steps": [
+        {"label": "Orchestrator", "sublabel": "Reads business context"},
+        {"label": "Reddit Agent", "sublabel": "Subreddits + search"},
+        {"label": "Facebook Agent", "sublabel": "Pages + groups"},
+        {"label": "Instagram Agent", "sublabel": "Public posts + hashtags"},
+        {"label": "Dashboard", "sublabel": "Unified results view"}
+      ],
+      "notes": "Each platform agent runs independently and reports back to a shared dashboard. Future Chinese platforms (Xiaohongshu, Weibo) can be added as additional agents."
+    }
+  ],
+  "stack": [
+    {"layer": "Browser Automation", "technology": "Chrome DevTools MCP", "purpose": "Controls a real Chrome browser to navigate and post comments on Reddit, Facebook, and Instagram without using their APIs"},
+    {"layer": "Web Scraping", "technology": "Firecrawl (or equivalent)", "purpose": "Pulls recent public posts from target platforms based on topic keywords for AI analysis"},
+    {"layer": "AI Engine", "technology": "Claude API (Anthropic)", "purpose": "Analyzes post relevance, categorizes conversations, and generates natural contextual comments in your voice"},
+    {"layer": "Frontend Dashboard", "technology": "Next.js on Vercel", "purpose": "Web interface for reviewing matched posts, reading AI-generated comments, and approving or skipping each one"},
+    {"layer": "Backend API", "technology": "Node.js", "purpose": "Connects the dashboard to the scraping layer, AI engine, and browser automation; manages approval state"},
+    {"layer": "Infrastructure", "technology": "VPS + Static Proxy IP", "purpose": "Hosts the system so it runs 24/7 without your computer needing to be on; static IP prevents account flags from location changes"},
+    {"layer": "Activity Logging", "technology": "Google Sheets", "purpose": "Records every post found, match decision, generated comment, approval status, and posting timestamp for performance review"}
+  ],
+  "risks": [
+    {"risk": "Platform anti-bot detection", "mitigation": "All browser interactions use human-like timing and pacing through Chrome DevTools MCP. Static proxy IP ensures consistent location. Account activity stays within natural engagement volumes."},
+    {"risk": "Instagram rate limits and restrictions", "mitigation": "Comment posting is rate-limited to a safe daily cap. Account warm-up period is observed before automation begins. Approval gate prevents bulk unreviewed posting."},
+    {"risk": "Scraped post volume is too high or too noisy", "mitigation": "The AI relevance filter is tuned per business context. Dashboard includes category filters so you can focus on specific conversation types (new buyers, questions, complaints, etc.)."},
+    {"risk": "Facebook group content requires membership", "mitigation": "Posts from private groups require the account to be a member. The system only engages content the logged-in account already has access to. Group joining is done manually."},
+    {"risk": "Platform policy changes", "mitigation": "All automation runs through a real browser as a logged-in user, the same way a human would use the site. No official API is used, so API policy changes do not affect the system."}
+  ],
+  "security_notes": [
+    "Your social media credentials are stored only on your VPS in a local environment file and are never transmitted to any third party",
+    "The system uses your own accounts, not shared or pooled accounts, so all activity is traceable only to you",
+    "Static proxy IP prevents login anomalies that could trigger account security reviews",
+    "The approval gate ensures no comment is posted without your explicit confirmation",
+    "All intermediate data (scraped posts, AI outputs) is stored locally on the VPS and cleared after each run"
+  ],
+  "requirements": {
+    "software": [
+      {"name": "Chrome DevTools MCP", "purpose": "Browser automation layer that controls Chrome to navigate platforms and post comments"},
+      {"name": "Firecrawl (or equivalent scraper)", "purpose": "Scrapes recent public posts from Reddit, Facebook, and Instagram by topic"},
+      {"name": "Claude API (Anthropic)", "purpose": "Powers post relevance filtering and comment generation"},
+      {"name": "Next.js on Vercel", "purpose": "Hosts the approval dashboard accessible from any browser"},
+      {"name": "Node.js backend", "purpose": "Orchestrates scraping, AI calls, browser automation, and dashboard state"},
+      {"name": "VPS (e.g., DigitalOcean, Hetzner)", "purpose": "Runs the system 24/7 without requiring your computer to be on"},
+      {"name": "Static Proxy IP", "purpose": "Keeps a consistent IP address to prevent platform account flags"},
+      {"name": "Google Sheets", "purpose": "Activity log for all runs, posts found, and comments posted"}
+    ],
+    "credentials": [
+      {"name": "Reddit account login", "purpose": "The system posts comments from your Reddit account through the browser"},
+      {"name": "Facebook account login", "purpose": "The system posts comments on Facebook as your account through the browser"},
+      {"name": "Instagram account login", "purpose": "The system posts comments on Instagram as your account through the browser"},
+      {"name": "Anthropic API key", "purpose": "Powers the AI relevance filter and comment generation engine"},
+      {"name": "Firecrawl API key", "purpose": "Enables the scraping layer to pull recent posts from target platforms"},
+      {"name": "Google account (for Sheets)", "purpose": "Allows the system to write the activity log to a shared Google Sheets file"},
+      {"name": "Business context brief", "purpose": "A written description of your business, target audience, keywords to monitor, and preferred comment tone. This is the AI core instruction set."}
+    ]
+  },
+  "cost_breakdown": {
+    "initial": [
+      {"item": "VPS setup (one-time configuration)", "cost": "$0 (covered in project)"},
+      {"item": "Vercel deployment (free tier)", "cost": "$0"},
+      {"item": "Google Sheets (free)", "cost": "$0"}
+    ],
+    "monthly": [
+      {"item": "VPS hosting (e.g., DigitalOcean Droplet)", "cost": "$6-12/month"},
+      {"item": "Static proxy IP (dedicated residential)", "cost": "$10-20/month"},
+      {"item": "Anthropic Claude API usage", "cost": "$5-20/month (usage-based)"},
+      {"item": "Firecrawl API (scraping)", "cost": "$16/month (starter plan)"},
+      {"item": "Vercel hosting (free tier sufficient)", "cost": "$0"}
+    ],
+    "initial_total": "$0 additional",
+    "monthly_total": "~$37-68/month depending on usage volume"
+  },
+  "pricing": {
+    "total_price": "$850"
+  },
+  "timeline": {
+    "duration": "3-4 weeks",
+    "phases": [
+      {"phase": "Phase 1: Dashboard + Reddit Agent", "duration": "Weeks 1-2"},
+      {"phase": "Phase 2: Facebook + Instagram Agents", "duration": "Weeks 2-3"},
+      {"phase": "Phase 3: Orchestrator, Logging + Final Tuning", "duration": "Weeks 3-4"}
+    ]
+  },
+  "payment_terms": {
+    "installment_1": {"percentage": "100%", "amount": "$850", "trigger": "Due upfront to begin the project"}
+  },
+  "include_about": true,
+  "relevant_skills": [
+    "AI agents and automation systems",
+    "Claude Code and Chrome DevTools MCP",
+    "Custom software integrations",
+    "Full-stack development (Next.js, Node.js)",
+    "Web scraping and data pipelines",
+    "Google Sheets and API integrations"
+  ],
+  "include_portfolio": true
+}
