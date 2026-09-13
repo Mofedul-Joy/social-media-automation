@@ -13,11 +13,13 @@ const HEADER = [
   "Timestamp",
   "Platform",
   "Category",
+  "Intent",
   "Relevance",
   "Status",
   "Post URL",
   "AI Summary",
   "Comment",
+  "Found by query",
   "Error",
 ];
 
@@ -46,11 +48,13 @@ function rowFor(c: Candidate, event: string): (string | number)[] {
     new Date().toISOString(),
     c.platform,
     c.category,
+    c.intent_score,
     c.relevance,
     event,
     c.url,
     c.ai_summary,
     c.draft_comment,
+    c.source_query ?? "",
     c.error ?? "",
   ];
 }
@@ -61,7 +65,7 @@ export async function ensureHeader(): Promise<void> {
   try {
     const sheets = await getSheets();
     const id = process.env.ACTIVITY_LOG_SHEET_ID!;
-    const res = await sheets.spreadsheets.values.get({ spreadsheetId: id, range: "A1:I1" });
+    const res = await sheets.spreadsheets.values.get({ spreadsheetId: id, range: "A1:K1" });
     if (!res.data.values || res.data.values.length === 0) {
       await sheets.spreadsheets.values.update({
         spreadsheetId: id,

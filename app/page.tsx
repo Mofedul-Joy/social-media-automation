@@ -1,8 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import TopicReply from "./TopicReply";
 
-type Platform = "reddit" | "facebook" | "instagram";
+type Platform = "reddit" | "facebook" | "instagram" | "threads" | "hackernews" | "stackexchange";
 type Status = "pending" | "approved" | "skipped" | "posted" | "failed";
 
 interface Candidate {
@@ -12,7 +13,9 @@ interface Candidate {
   title: string | null;
   author: string | null;
   relevance: number;
+  intent_score: number;
   category: string;
+  source_query: string | null;
   ai_summary: string;
   draft_comment: string;
   status: Status;
@@ -63,7 +66,7 @@ export default function Page() {
     load();
   }, [load]);
 
-  const decide = async (id: number, decision: "approved" | "skipped") => {
+  const decide = async (id: number, decision: "approved" | "skipped" | "posted") => {
     setBusy(id);
     try {
       await fetch("/api/decision", {
@@ -71,11 +74,26 @@ export default function Page() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ id, decision, comment: drafts[id] }),
       });
-      flash(decision === "approved" ? "Approved — queued for posting" : "Skipped");
+      flash(
+        decision === "approved" ? "Approved — copy the comment and post it" :
+        decision === "posted" ? "Marked as posted" : "Skipped",
+      );
       await load();
     } finally {
       setBusy(null);
     }
+  };
+
+  /** No auto-poster exists: copy the comment for pasting, then open the real post so a human posts it. */
+  const openToPost = async (c: Candidate) => {
+    try {
+      await navigator.clipboard.writeText(drafts[c.id] ?? c.draft_comment);
+      flash("Comment copied to clipboard");
+    } catch {
+      flash("Could not copy — comment is below, copy manually");
+    }
+    window.open(c.url, "_blank", "noopener,noreferrer");
+    if (c.status === "pending") await decide(c.id, "approved");
   };
 
   return (
@@ -83,7 +101,9 @@ export default function Page() {
       <header className="top">
         <div>
           <h1>Engagement Console</h1>
-          <div className="sub">Review AI-drafted comments. Nothing posts without your approval.</div>
+          <div className="sub">
+            Ranked by buyer intent, not topic match. No auto-poster: you copy the comment and post it yourself.
+          </div>
         </div>
         <div className="row">
           <button className="btn primary" onClick={load} disabled={loading}>
@@ -91,6 +111,8 @@ export default function Page() {
           </button>
         </div>
       </header>
+
+      <TopicReply onFlash={flash} />
 
       <div className="tabs">
         {TABS.map((t) => (
@@ -107,7 +129,9 @@ export default function Page() {
 
       {items.length === 0 ? (
         <div className="empty">
-          {loading ? "Loading…" : `No ${status} posts. Discovery runs on a schedule (npm run discover) and fills this queue.`}
+          {loading
+            ? "Loading…"
+            : `No ${status} posts. Discovery runs off-account on a schedule (npm run discover) and fills this queue.`}
         </div>
       ) : (
         items.map((c) => (
@@ -115,10 +139,12 @@ export default function Page() {
             <div className="meta">
               <span className={`pill ${c.platform}`}>{c.platform}</span>
               <span className="pill cat">{c.category}</span>
-              <span className="rel">relevance {(c.relevance * 100).toFixed(0)}%</span>
+              <span className="rel">intent {(c.intent_score * 100).toFixed(0)}%</span>
+              <span className="rel dim">relevance {(c.relevance * 100).toFixed(0)}%</span>
             </div>
             {c.title && <h3>{c.title}</h3>}
             <p className="summary">{c.ai_summary}</p>
+            {c.source_query && <p className="query">found by: “{c.source_query}”</p>}
 
             {status === "pending" ? (
               <textarea
@@ -140,9 +166,9 @@ export default function Page() {
                   <button
                     className="btn approve"
                     disabled={busy === c.id}
-                    onClick={() => decide(c.id, "approved")}
+                    onClick={() => openToPost(c)}
                   >
-                    Approve
+                    Copy comment &amp; open post ↗
                   </button>
                   <button
                     className="btn skip"
@@ -150,6 +176,24 @@ export default function Page() {
                     onClick={() => decide(c.id, "skipped")}
                   >
                     Skip
+                  </button>
+                </>
+              )}
+              {status === "approved" && (
+                <>
+                  <button
+                    className="btn approve"
+                    disabled={busy === c.id}
+                    onClick={() => openToPost(c)}
+                  >
+                    Open post again ↗
+                  </button>
+                  <button
+                    className="btn done"
+                    disabled={busy === c.id}
+                    onClick={() => decide(c.id, "posted")}
+                  >
+                    Mark as posted
                   </button>
                 </>
               )}

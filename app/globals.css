@@ -62,6 +62,7 @@ header.top .sub { color: var(--muted); font-size: 13px; margin-top: 2px; }
 .btn.approve:hover { border-color: var(--green); }
 .btn.skip { background: var(--red-bg); border-color: #5c2226; color: var(--red); }
 .btn.skip:hover { border-color: var(--red); }
+.btn.done { background: var(--accent); border-color: var(--accent); color: #06101f; font-weight: 600; }
 
 .tabs { display: flex; gap: 6px; margin-bottom: 20px; flex-wrap: wrap; }
 .tab {
@@ -87,8 +88,15 @@ header.top .sub { color: var(--muted); font-size: 13px; margin-top: 2px; }
 .pill.reddit { color: #ff8b60; border-color: #6b3a2a; }
 .pill.facebook { color: #6ea8ff; border-color: #2a3f6b; }
 .pill.instagram { color: #ff7ac2; border-color: #6b2a52; }
+.pill.threads { color: #c9b7ff; border-color: #453a6b; }
+.pill.hackernews { color: #ff9b3a; border-color: #6b4a1f; }
+.pill.stackexchange { color: #6bc7ff; border-color: #1f4a6b; }
 .pill.cat { color: var(--text); }
-.rel { margin-left: auto; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+/* Intent is the score that decides whether a post is worth a human's time,
+   so it reads first and relevance sits behind it. */
+.rel { margin-left: auto; font-size: 12px; color: var(--text); font-variant-numeric: tabular-nums; }
+.rel.dim { margin-left: 10px; color: var(--muted); }
+.query { margin: 2px 0 8px; font-size: 12px; color: var(--muted); }
 
 .card h3 { margin: 0 0 6px; font-size: 15px; }
 .card .summary { color: var(--muted); font-size: 13px; margin: 0 0 12px; }

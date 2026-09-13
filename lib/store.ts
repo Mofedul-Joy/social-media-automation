@@ -30,6 +30,7 @@ function db(): Database.Database {
       title        TEXT,
       body         TEXT NOT NULL,
       relevance    REAL NOT NULL DEFAULT 0,
+      intent_score REAL NOT NULL DEFAULT 0,
       category     TEXT NOT NULL DEFAULT '',
       ai_summary   TEXT NOT NULL DEFAULT '',
       draft_comment TEXT NOT NULL DEFAULT '',
@@ -38,12 +39,30 @@ function db(): Database.Database {
       decided_at   TEXT,
       posted_at    TEXT,
       error        TEXT,
+      source_query TEXT,
       UNIQUE(platform, external_id)
     );
     CREATE INDEX IF NOT EXISTS idx_status ON candidates(status);
   `);
+  migrate(d);
   _db = d;
   return d;
+}
+
+/**
+ * Additive column migrations for databases created before the intent lane.
+ * SQLite has no `ADD COLUMN IF NOT EXISTS`, so check the table info first.
+ */
+function migrate(d: Database.Database): void {
+  const cols = new Set(
+    (d.prepare("PRAGMA table_info(candidates)").all() as { name: string }[]).map((c) => c.name),
+  );
+  if (!cols.has("intent_score")) {
+    d.exec("ALTER TABLE candidates ADD COLUMN intent_score REAL NOT NULL DEFAULT 0");
+  }
+  if (!cols.has("source_query")) {
+    d.exec("ALTER TABLE candidates ADD COLUMN source_query TEXT");
+  }
 }
 
 /** Returns true if this post has already been seen (any status). */
@@ -58,9 +77,11 @@ export function alreadySeen(platform: Platform, externalId: string): boolean {
 export function insertCandidate(post: ScrapedPost, ai: AiAnalysis): number | null {
   const stmt = db().prepare(`
     INSERT OR IGNORE INTO candidates
-      (platform, external_id, url, author, title, body, relevance, category, ai_summary, draft_comment, status, created_at)
+      (platform, external_id, url, author, title, body, relevance, intent_score, category,
+       ai_summary, draft_comment, source_query, status, created_at)
     VALUES
-      (@platform, @external_id, @url, @author, @title, @body, @relevance, @category, @ai_summary, @draft_comment, 'pending', @created_at)
+      (@platform, @external_id, @url, @author, @title, @body, @relevance, @intent_score, @category,
+       @ai_summary, @draft_comment, @source_query, 'pending', @created_at)
   `);
   const info = stmt.run({
     platform: post.platform,
@@ -70,9 +91,11 @@ export function insertCandidate(post: ScrapedPost, ai: AiAnalysis): number | nul
     title: post.title ?? null,
     body: post.body,
     relevance: ai.relevance,
+    intent_score: ai.intent,
     category: ai.category,
     ai_summary: ai.summary,
     draft_comment: ai.comment,
+    source_query: post.source_query ?? null,
     created_at: new Date().toISOString(),
   });
   return info.changes > 0 ? Number(info.lastInsertRowid) : null;
@@ -80,7 +103,9 @@ export function insertCandidate(post: ScrapedPost, ai: AiAnalysis): number | nul
 
 export function listCandidates(status?: PostStatus): Candidate[] {
   const q = status
-    ? db().prepare("SELECT * FROM candidates WHERE status = ? ORDER BY relevance DESC, created_at DESC")
+    ? db().prepare(
+        "SELECT * FROM candidates WHERE status = ? ORDER BY intent_score DESC, relevance DESC, created_at DESC",
+      )
     : db().prepare("SELECT * FROM candidates ORDER BY created_at DESC");
   return (status ? q.all(status) : q.all()) as Candidate[];
 }
@@ -99,31 +124,10 @@ export function setDecision(id: number, status: "approved" | "skipped", editedCo
   }
 }
 
+/** The human posted the comment themselves after opening it from the dashboard. */
 export function markPosted(id: number): void {
   db().prepare("UPDATE candidates SET status = 'posted', posted_at = ?, error = NULL WHERE id = ?")
     .run(new Date().toISOString(), id);
-}
-
-export function markFailed(id: number, error: string): void {
-  db().prepare("UPDATE candidates SET status = 'failed', error = ? WHERE id = ?").run(error, id);
-}
-
-/** Approved posts waiting to be published, optionally filtered by platform. */
-export function nextApproved(platform?: Platform, limit = 50): Candidate[] {
-  const q = platform
-    ? db().prepare("SELECT * FROM candidates WHERE status = 'approved' AND platform = ? ORDER BY decided_at ASC LIMIT ?")
-    : db().prepare("SELECT * FROM candidates WHERE status = 'approved' ORDER BY decided_at ASC LIMIT ?");
-  return (platform ? q.all(platform, limit) : q.all(limit)) as Candidate[];
-}
-
-/** Count posts published today for a platform (for daily-cap enforcement). */
-export function postedTodayCount(platform: Platform): number {
-  const startOfDay = new Date();
-  startOfDay.setHours(0, 0, 0, 0);
-  const row = db()
-    .prepare("SELECT COUNT(*) as n FROM candidates WHERE platform = ? AND status = 'posted' AND posted_at >= ?")
-    .get(platform, startOfDay.toISOString()) as { n: number };
-  return row.n;
 }
 
 export function stats(): Record<PostStatus | "total", number> {

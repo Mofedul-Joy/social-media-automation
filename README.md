@@ -1,30 +1,69 @@
 # Social Media Engagement Automation
 
-Semi-automated engagement across **Reddit, Facebook, and Instagram**. You define a
-business context; the system reads recent relevant posts **through a logged-in Chrome
-browser** (no scraping service, no platform APIs, no API keys for discovery), uses
-Claude to score relevance and draft comments, and shows them in a dashboard for
-approval. Approved comments are posted from the client's own accounts through the same
-browser. Every action is logged to Google Sheets.
+Semi-automated engagement across **Reddit, Facebook Groups, and Threads** for
+discovery, and **Reddit, Facebook, and Instagram** for commenting. You define a
+business context; the system searches public posts **off-account through vendor
+APIs**, scores each one on two axes (topic relevance AND buyer intent), and shows
+the survivors in a dashboard for approval. Approved comments are posted from the
+client's own accounts through a logged-in browser. Every action is logged to
+Google Sheets.
 
-Client: **Hon Kwok** · Built by Mofedul Joy.
+Client: **Hon Kwok** - built by Mofedul Joy.
 
 ## Architecture
 
+Two lanes, deliberately separate. This split is the central design decision.
+
 ```
-business context ─▶ logged-in Chrome (Playwright) reads Reddit/FB/IG ─▶ Claude (relevance + draft)
-                       (same browser used for posting; residential IP)          │
-                                                                            SQLite queue
-                                                                                │
-                            Google Sheets ◀── logged-in Chrome (post) ◀── Next.js dashboard
-                              (activity log)     approved comments          (approval gate)
+                      DISCOVERY LANE (read, off-account)
+business context -> intent query matrix -> EnsembleData  (Reddit, Threads)
+   (topics)           (lib/intent.ts)      SocialAPIs    (Facebook Groups)
+                                                   |
+                                    Claude: relevance + INTENT + draft
+                                                   |
+                                             SQLite queue
+                                                   |
+                                     Next.js dashboard (approval gate)
+                                                   |
+                      ENGAGEMENT LANE (write, on-account)
+                     logged-in Chrome + residential proxy -> comment
+                                                   |
+                                          Google Sheets log
 ```
 
-**Discovery uses no third-party scraper and no API keys.** The same real, logged-in
-Chrome that posts comments also reads each platform's native search/feed:
-- **Reddit** — authenticated `.json` endpoints via the logged-in session (public JSON
-  now 403s from plain servers, so we read it inside the browser session).
-- **Facebook / Instagram** — rendered post text from in-app search/hashtag pages (DOM).
+**Why the lanes are separate.** A previous build read posts from the client's own
+logged-in account and got the account banned. Discovery now runs entirely on
+third-party read APIs over public data, so a block costs a vendor credit instead
+of the asset the whole system depends on. Nothing in the discovery lane ever
+touches the client's session.
+
+**Why there is no Meta write API.** Graph API only writes to Pages and media you
+own, `/search?type=post` was removed in v2.0, and the Content Library is academic
+access only. Commenting on a stranger's post requires a logged-in browser. That is
+why the engagement lane exists and why it stays low volume and human paced.
+
+**Why queries are intent phrases, not topic nouns.** Searching "home gym" returns
+businesses selling home gyms, because that is who publishes about home gyms.
+Relevance is not intent. `lib/intent.ts` wraps each client topic in buyer phrasing
+("looking for someone to build {topic}") before it reaches an API, which flips the
+result set from sellers to people asking. The classifier then scores both axes
+separately and rejects anything it reads as a seller, however on-topic it is.
+
+**Why Instagram is discovery-disabled.** Hashtag and account search return sellers
+by construction. It stays in the engagement lane only.
+
+### Discovery sources
+
+| Lane | Vendor | Endpoint | Measured yield |
+|---|---|---|---|
+| Reddit | EnsembleData | `/reddit/keyword/search` | 25 posts / 2 units, cheapest by ~12x |
+| Threads | EnsembleData | `/threads/keyword/search` | ~1 unit / post |
+| Facebook groups | SocialAPIs | `/facebook/groups/posts` | 3 posts / credit, real timestamps + top comments |
+| Facebook group discovery | SocialAPIs | `/facebook/search/posts` | ~1.4 posts / credit, flaky, no timestamps |
+
+`search/posts` is for finding **which groups** the buyers are in, run once via
+`npm run fb-groups`. Those group URLs are then polled directly. Search finds
+groups, groups find posts.
 
 - **Layer 1 – directive:** `./directives/build_social_engagement_system.md`
 - **Layer 2 – orchestration:** the dashboard (`app/`) + posting worker (`agents/worker.ts`)
@@ -35,31 +74,42 @@ Chrome that posts comments also reads each platform's native search/feed:
 ```bash
 cd Hon-SMA
 npm install
-npx playwright install chrome        # real Chrome — used for BOTH discovery and posting
-cp .env.template .env                 # set ANTHROPIC_API_KEY, DASHBOARD_PASSWORD, etc.
+npx playwright install chrome        # real Chrome, engagement lane only
+cp .env.template .env                 # ANTHROPIC_API_KEY, ENSEMBLEDATA_TOKEN,
+                                      # SOCIALAPIS_TOKEN, DASHBOARD_PASSWORD
 cp config/business_context.example.json config/business_context.json   # then edit
 ```
 
 Fill `config/business_context.json` with the client's product, audience, keywords,
 tone, and which platforms/subreddits/hashtags to monitor. This is the AI's core brief.
 
-### One-time account login (required before discovery works)
+### One-time account login (required before POSTING works)
 ```bash
 npm run login   # opens Chrome; sign in to Reddit/Facebook/Instagram once
 ```
-Sessions persist in `CHROME_USER_DATA_DIR`. Discovery and posting both rely on these
-logged-in sessions — discovery reads each platform as the logged-in user.
+Sessions persist in `CHROME_USER_DATA_DIR` and are used by the engagement lane only.
+Discovery never touches them. Create the accounts manually through the same proxy the
+VPS will operate from, so the signup IP matches the operating IP.
 
 ## Daily workflow
 
-1. **Discover** — `npm run discover` (scheduled via cron on the VPS). Opens the
-   logged-in Chrome, reads recent posts on each enabled platform, scores them with
-   Claude, and queues the relevant ones. *(Not triggered from the web dashboard — it
-   drives a real browser, so it runs as a CLI/cron job, not inside the Next server.)*
+0. **Check the queries** - `npm run queries` prints the intent matrix a pass would
+   run. Costs nothing, calls no API. Do this after any change to `topics`.
+1. **Discover** - `npm run discover` (scheduled via cron on the VPS). Runs the intent
+   queries against the vendor APIs off-account, scores each post on relevance AND
+   intent, and queues only what clears both. Add a platform name to limit the pass:
+   `npm run discover -- reddit`.
 2. **Review** — open the dashboard (`npm run start`, behind auth), read each AI-drafted
    comment, edit if needed, then **Approve** or **Skip**.
-3. **Post** — `npm run post` (also cron). Opens Chrome and posts only the approved
+3. **Post** - `npm run post` (also cron). Opens Chrome and posts only the approved
    comments, respecting per-platform daily caps and human-like pacing.
+
+### Occasional
+- `npm run fb-groups` - find which Facebook Groups the buyers are in, then paste the
+  URLs into `platforms.facebook.groups`. Run once per client, not per pass.
+- `npm run measure -- reddit 4` - run the intent lane against the noun baseline and
+  report buyer hit rate and units per buyer for each. Writes nothing to the queue.
+  This is the evidence run.
 
 ## Deployment (single VPS)
 
@@ -92,13 +142,44 @@ UI renders. This is purely a folder-name issue, not a code issue.
 
 ## Status
 
-- **Phase 1 (done):** dashboard, discovery pipeline, SQLite queue, Reddit agent.
-- **Phase 2:** Facebook + Instagram agents (implemented; selectors need live tuning).
-- **Phase 3:** multi-platform orchestrator, Google Sheets polish, prompt tuning, handover.
+**Done**
+- Dashboard, SQLite queue, approval gate, Google Sheets log.
+- Discovery lane rebuilt off-account on vendor APIs: Reddit and Threads via
+  EnsembleData, Facebook Groups via SocialAPIs. No client account is ever read from.
+- Intent query generator (`lib/intent.ts`) and the two-axis classifier. Verified
+  end to end: an on-topic seller post scores 1.0 relevance and is rejected, while
+  a buyer post scores 0.95 intent and reaches the queue.
+- Per-run vendor unit accounting, so cost per client is measured, not estimated.
+
+**Next**
+- Run `npm run measure` with live tokens to produce the intent-vs-noun evidence.
+- Run `npm run fb-groups` to seed `platforms.facebook.groups`, then enable Facebook.
+
+**Blocked on others**
+- AdsPower Professional plan + Local API key, then swap `agents/browser.ts` from
+  `launchPersistentContext` to `connectOverCDP`.
+- Google service-account JSON for the Sheets log.
+- The proxy on file is a datacenter IP (AS10753 Lumen) and is refused at Facebook
+  signup. It needs replacing with a residential or mobile-ISP proxy before any
+  account is created.
 
 ## Env vars
 
-See `.env.template`. Key ones: `ANTHROPIC_API_KEY` (the only paid API — discovery uses
-no scraping service), `DASHBOARD_USER`/`DASHBOARD_PASSWORD`, `DATABASE_PATH`,
-`ACTIVITY_LOG_SHEET_ID` + `GOOGLE_SERVICE_ACCOUNT_JSON`, `CHROME_USER_DATA_DIR`,
-`PROXY_URL` (Canadian static residential proxy), and the per-platform daily caps.
+See `.env.template`. Key ones:
+
+| Var | Lane | What it is |
+|---|---|---|
+| `ANTHROPIC_API_KEY` | both | Claude, for the two-axis classifier and drafts |
+| `ENSEMBLEDATA_TOKEN` | discovery | Reddit + Threads search. HTTP 495 means the daily unit quota is spent, resets 00:00 UTC |
+| `SOCIALAPIS_TOKEN` | discovery | Facebook group posts + post search |
+| `MAX_POST_AGE_DAYS` | discovery | Drop posts older than this (default 14) |
+| `MAX_ANALYZE_PER_RUN` | discovery | Ceiling on classifier calls per pass (default 120) |
+| `DASHBOARD_USER` / `DASHBOARD_PASSWORD` | dashboard | Basic Auth on every page and route |
+| `DATABASE_PATH` | all | Absolute path; the dashboard, discover and post worker must share one file |
+| `ACTIVITY_LOG_SHEET_ID`, `GOOGLE_SERVICE_ACCOUNT_JSON` | log | Google Sheets activity log |
+| `CHROME_USER_DATA_DIR` | engagement | Persistent logged-in Chrome profile |
+| `PROXY_URL`, `PROXY_USERNAME`, `PROXY_PASSWORD` | engagement | Residential or mobile-ISP proxy. A datacenter IP is refused at Facebook signup |
+| `MAX_*_POSTS_PER_DAY`, `ACTION_DELAY_*` | engagement | Volume caps and human pacing |
+
+No published number exists for a safe comments-per-day rate on any of these
+platforms. The caps are deliberately conservative; keep the volume low.

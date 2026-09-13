@@ -1,4 +1,20 @@
-# Architecture — Social Engagement Automation (Hon Kwok)
+# Architecture - Social Engagement Automation (Hon Kwok)
+
+> **Version 3, 2026-08-31 supersedes section 2a below.** Discovery no longer runs
+> through the client's logged-in browser. It runs off-account on third-party read
+> APIs, and queries are generated intent phrases rather than topic nouns. The
+> current design is documented in README.md ("Two lanes"). Sections 2a and the
+> per-platform scraping notes are kept for the decision history only.
+>
+> What changed and why:
+> - Reading from the client's own session is what got a previous build's account
+>   banned. A block on the discovery lane must cost a vendor credit, not the account.
+> - Reddit is blocked to direct requests from the VPS, so it goes through EnsembleData.
+> - There is no Meta post-search or comment-write API. Facebook discovery is
+>   SocialAPIs; Facebook commenting stays in the logged-in browser.
+> - Instagram was dropped from discovery: its search surfaces sellers, not buyers.
+> - Topic nouns return the businesses selling the thing. Intent phrases return the
+>   people asking. See lib/intent.ts.
 
 Version 2, 2026-07-02. Supersedes the Firecrawl/Vercel/API-key assumptions in the
 original proposal. This is the plan we build and deploy against.
