@@ -1,7 +1,7 @@
 import { searchReddit } from "@/lib/sources/arcticshift";
 import { searchHackerNews } from "@/lib/sources/hackernews";
 import { searchStackOverflow } from "@/lib/sources/stackexchange";
-import { groupPosts } from "@/lib/sources/socialapis";
+import { groupPosts, searchPosts } from "@/lib/sources/socialapis";
 import { isFresh } from "@/lib/sources/http";
 import type { BusinessContext, ScrapedPost, SourceResult } from "@/lib/types";
 
@@ -22,18 +22,26 @@ export const MAX_RESULTS = 5;
  * configured list is ~3 minutes on its own, so a live lookup takes the first
  * couple and abandons the source entirely if even that overruns.
  */
-const MAX_LIVE_SUBREDDITS = 2;
+// Arctic Shift measures ~13s/subreddit; 2 subreddits (27-32s measured) blows
+// the 20s budget below almost every time, so the race's timeout branch wins
+// and Reddit silently returns []. 1 subreddit fits inside the budget.
+const MAX_LIVE_SUBREDDITS = 1;
 const REDDIT_BUDGET_MS = 20_000;
 /**
- * Facebook has no keyword search (`socialapis.ts`'s `searchPosts` is for
- * locating groups, not routine polling — expensive, no timestamps). The only
- * usable call, `groupPosts`, returns a group's recent posts unfiltered and
- * costs real SocialAPIs credits (~1 per 3 posts) every time it's called.
+ * Facebook has two sources, and which one runs depends only on whether any
+ * group URLs are configured:
  *
- * One group per search is a hard cost ceiling, not a tuning knob: combined
- * with the `retries: 0` groupPosts passes to getJson, a search can bill at
- * most one SocialAPIs HTTP call no matter how many groups are configured or
- * how the vendor misbehaves. The same time budget as Reddit applies on top.
+ *   groups configured  `groupPosts` — cheaper per post (~1 credit per 3),
+ *                      real timestamps, but a group's whole unfiltered feed,
+ *                      so `matchesTopic` has to do the topic filtering.
+ *   no groups          `searchPosts` — keyword search, so the topic filter is
+ *                      the vendor's; worse per credit and no timestamps, but
+ *                      the alternative is Facebook returning nothing at all.
+ *
+ * Either way one SocialAPIs HTTP call per search is a hard cost ceiling, not a
+ * tuning knob: one group (MAX_LIVE_GROUPS) or one search, and both pass
+ * `retries: 0` to getJson so a misbehaving vendor cannot triple the bill. The
+ * same time budget as Reddit applies on top.
  */
 const MAX_LIVE_GROUPS = 1;
 const FACEBOOK_BUDGET_MS = 20_000;
@@ -84,6 +92,21 @@ async function fetchFacebookGroups(groups: string[], after: Date): Promise<Scrap
 }
 
 /**
+ * Keyword search, for when no group is configured. Exactly one call, so no
+ * matchesTopic pass: `q` already went to the vendor as the query.
+ */
+async function fetchFacebookSearch(q: string): Promise<ScrapedPost[]> {
+  try {
+    const res = await searchPosts(q);
+    console.log(`discover facebook search:${q}: ${res.unitsCharged} SocialAPIs credit(s)`);
+    return res.posts;
+  } catch (err) {
+    console.error(`discover facebook search:${q}: ${(err as Error).message}`);
+    return [];
+  }
+}
+
+/**
  * Fresh posts on `topic` across every enabled discovery source, newest first.
  * Never throws for a source failure: an empty array is a normal answer.
  */
@@ -96,8 +119,8 @@ export async function discoverPosts(
 
   // Only sources with real free-text keyword search reach the caller without a
   // local topic filter. Arctic Shift's `query` needs a subreddit to scope to;
-  // Facebook has no query at all, so its posts are filtered by matchesTopic
-  // below instead of by the vendor.
+  // Facebook's group feed has no query at all, so those posts are filtered by
+  // matchesTopic below instead of by the vendor.
   const reddit = ctx.platforms?.reddit;
   const facebook = ctx.platforms?.facebook;
   const after = new Date(Date.now() - MAX_POST_AGE_DAYS * 86400_000);
@@ -115,12 +138,16 @@ export async function discoverPosts(
       ]),
     );
   }
-  if (facebook?.enabled && (facebook.groups?.length ?? 0) > 0) {
+  if (facebook?.enabled) {
+    const fb =
+      (facebook.groups?.length ?? 0) > 0
+        ? fetchFacebookGroups(facebook.groups!, after).then((posts) =>
+            posts.filter((p) => matchesTopic(p, q)),
+          )
+        : fetchFacebookSearch(q);
     searches.push(
       Promise.race([
-        fetchFacebookGroups(facebook.groups!, after).then((posts) =>
-          posts.filter((p) => matchesTopic(p, q)),
-        ),
+        fb,
         new Promise<ScrapedPost[]>((r) => setTimeout(() => r([]), FACEBOOK_BUDGET_MS)),
       ]),
     );
@@ -136,8 +163,16 @@ export async function discoverPosts(
   const byId = new Map<string, ScrapedPost>();
   for (const p of fresh) if (!byId.has(p.external_id)) byId.set(p.external_id, p);
 
-  // Most recent first. Undated posts sort last.
-  return Array.from(byId.values())
-    .sort((a, b) => Date.parse(b.posted_at ?? "") - Date.parse(a.posted_at ?? "") || 0)
-    .slice(0, limit);
+  // Dated posts sort newest first. Undated posts (Facebook search results,
+  // which the vendor returns with no timestamp) get a reserved share of the
+  // slice instead of being sorted as "equal" to everything: a stable sort
+  // leaves them stranded behind any full page of dated results, so Facebook
+  // could bill a credit and still render zero cards.
+  const deduped = Array.from(byId.values());
+  const dated = deduped
+    .filter((p) => p.posted_at !== undefined)
+    .sort((a, b) => Date.parse(b.posted_at!) - Date.parse(a.posted_at!));
+  const undated = deduped.filter((p) => p.posted_at === undefined);
+  const reserved = Math.min(undated.length, 2, limit);
+  return [...dated.slice(0, limit - reserved), ...undated.slice(0, reserved)];
 }

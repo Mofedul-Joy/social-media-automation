@@ -14,7 +14,8 @@ import { getJson, externalIdFromUrl, SourceError } from "./http";
  *      ~1.4 posts/credit, flaky, and it returns no timestamps.
  *   2. `groups/posts` against those group URLs from then on.
  *      3 posts/credit, real timestamps, and top comments.
- * Search finds groups. Groups find posts.
+ * Search finds groups. Groups find posts. With no groups configured, search is
+ * also the fallback discovery source — worse per credit, but not zero.
  */
 
 const BASE = "https://api.socialapis.io";
@@ -31,14 +32,22 @@ function items(json: any): any[] {
   return d?.items ?? d?.results ?? d?.posts ?? (Array.isArray(d) ? d : []);
 }
 
+/**
+ * `search/posts` nests the post under `basic_info`/`owner_info`; the flat
+ * fields below are what `groups/posts` is documented to return. Both shapes are
+ * accepted because only the search shape has been seen live — reading the
+ * nested one first must not cost the group path its existing parsing.
+ */
 function textOf(p: any): string {
-  return String(p?.message ?? p?.text ?? p?.content ?? p?.description ?? "").trim();
+  return String(
+    p?.basic_info?.post_text ?? p?.message ?? p?.text ?? p?.content ?? p?.description ?? "",
+  ).trim();
 }
 
 function urlOf(p: any): string | null {
-  const u = p?.url ?? p?.post_url ?? p?.permalink ?? p?.link;
+  const u = p?.basic_info?.url ?? p?.url ?? p?.post_url ?? p?.permalink ?? p?.link;
   if (typeof u === "string" && u.startsWith("http")) return u;
-  const id = p?.post_id ?? p?.id;
+  const id = p?.basic_info?.post_id ?? p?.post_id ?? p?.id;
   return id ? `https://www.facebook.com/${id}` : null;
 }
 
@@ -60,9 +69,14 @@ function toPost(p: any, query: string, groupUrl?: string): ScrapedPost | null {
     .slice(0, 5);
   return {
     platform: "facebook",
-    external_id: externalIdFromUrl(url),
+    // externalIdFromUrl drops the query string, and a large share of search
+    // results are `permalink.php?story_fbid=…` — every one of those collapses
+    // to the same id and the caller's dedupe throws all but one away. The
+    // vendor's own post_id is unique, so prefer it where the payload has one.
+    // Only the search shape does, so the group path keeps the URL-derived id.
+    external_id: p?.basic_info?.post_id ? String(p.basic_info.post_id) : externalIdFromUrl(url),
     url,
-    author: p?.author?.name ?? p?.owner?.name ?? p?.user?.name ?? undefined,
+    author: p?.owner_info?.owner_name ?? p?.author?.name ?? p?.owner?.name ?? p?.user?.name ?? undefined,
     title: groupUrl ? `Group post: ${groupUrl}` : undefined,
     body: comments.length ? `${body}\n\n--- top comments ---\n${comments.join("\n")}` : body,
     scraped_at: new Date().toISOString(),
@@ -99,9 +113,13 @@ export async function groupPosts(
 }
 
 /**
- * Keyword search across public Facebook posts. Use this to LOCATE groups, not
- * as a routine discovery source: it is expensive per post and returns no
- * timestamps, so freshness cannot be enforced on its results.
+ * Keyword search across public Facebook posts. Expensive per post and returns
+ * no timestamps, so freshness cannot be enforced on its results — but it is
+ * the only Facebook source that works with no group URL configured, so the
+ * discovery lane falls back to it when the group list is empty.
+ *
+ * Retries are off for the same reason as `groupPosts`: every attempt is a
+ * billable call, so one call is one charge rather than three.
  */
 export async function searchPosts(
   query: string,
@@ -110,11 +128,24 @@ export async function searchPosts(
   const params = new URLSearchParams({ query });
   if (recentOnly) params.set("recent_posts", "true");
   if (startTime) params.set("start_time", startTime.toISOString().slice(0, 10));
-  const json = await getJson(`${BASE}/facebook/search/posts?${params}`, { headers: headers() });
+  const json = await getJson(
+    `${BASE}/facebook/search/posts?${params}`,
+    { headers: headers() },
+    { retries: 0 },
+  );
   const posts = items(json)
     .map((p) => toPost(p, query))
     .filter((p): p is ScrapedPost => p !== null);
-  return { posts, unitsCharged: Math.max(1, Math.ceil(posts.length / 1.4)), errors: [] };
+  // The vendor reports the real charge on every response and it is a flat 1
+  // per call, not the ~1.4-posts-per-credit the estimate below assumed
+  // (measured: 5 posts, creditsCharged 1). Trust the number it sends; keep the
+  // estimate only for a payload that omits meta.
+  const charged = json?.meta?.creditsCharged;
+  return {
+    posts,
+    unitsCharged: typeof charged === "number" ? charged : Math.max(1, Math.ceil(posts.length / 1.4)),
+    errors: [],
+  };
 }
 
 /** Group URLs referenced by a set of search results, for building the poll list. */
