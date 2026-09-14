@@ -93,7 +93,18 @@ export async function POST(req: Request) {
   const checked = sanitize(raw);
   if ("error" in checked) return NextResponse.json({ error: checked.error }, { status: 400 });
 
-  const ctx = await loadBusinessContext();
+  // A Supabase read can throw (see lib/config.ts); without a catch here Next
+  // answers with a bare 500 and a zero-byte body, same failure /api/config had.
+  let ctx;
+  try {
+    ctx = await loadBusinessContext();
+  } catch (err) {
+    console.error(`POST /api/analyze-post (config): ${(err as Error).message}`);
+    return NextResponse.json(
+      { error: `config store unavailable: ${(err as Error).message}` },
+      { status: 503 },
+    );
+  }
   try {
     // No relevance or intent floor here. The old route dropped low-intent posts
     // before the user ever saw them; the new UI shows both scores and lets the

@@ -30,10 +30,19 @@ export async function POST(req: Request) {
     );
   }
   const q = topic.trim();
-  const ctx = await loadBusinessContext();
-
-  // Not a failure: "nothing live on this topic right now" is a normal answer,
-  // so an empty list is a 200 and the UI renders its own empty state.
-  const posts = await discoverPosts(q, ctx, { limit: MAX_RESULTS });
-  return NextResponse.json({ topic: q, posts });
+  // A Supabase read can throw (see lib/config.ts); without a catch here Next
+  // answers with a bare 500 and a zero-byte body, same failure /api/config had.
+  try {
+    const ctx = await loadBusinessContext();
+    // Not a failure: "nothing live on this topic right now" is a normal answer,
+    // so an empty list is a 200 and the UI renders its own empty state.
+    const posts = await discoverPosts(q, ctx, { limit: MAX_RESULTS });
+    return NextResponse.json({ topic: q, posts });
+  } catch (err) {
+    console.error(`POST /api/topic-search: ${(err as Error).message}`);
+    return NextResponse.json(
+      { error: `search unavailable: ${(err as Error).message}` },
+      { status: 503 },
+    );
+  }
 }
