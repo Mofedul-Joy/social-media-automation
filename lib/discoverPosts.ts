@@ -24,11 +24,12 @@ export const MAX_RESULTS = 5;
  * configured list is ~3 minutes on its own, so a live lookup takes the first
  * couple and abandons the source entirely if even that overruns.
  */
-// Arctic Shift measures ~13s/subreddit; 2 subreddits (27-32s measured) blows
-// the 20s budget below almost every time, so the race's timeout branch wins
-// and Reddit silently returns []. 1 subreddit fits inside the budget.
-const MAX_LIVE_SUBREDDITS = 1;
-const REDDIT_BUDGET_MS = 20_000;
+// Arctic Shift measures ~13s/subreddit, so 2 subreddits is 27-32s measured.
+// Widened back to 2 (raw supply was the bottleneck, not the timeout) with the
+// budget raised to match, plus margin — still well inside the route's 60s
+// maxDuration since sources run concurrently, not added end to end.
+const MAX_LIVE_SUBREDDITS = 2;
+const REDDIT_BUDGET_MS = 40_000;
 /**
  * Facebook has two sources, and which one runs depends only on whether any
  * group URLs are configured:
@@ -94,18 +95,25 @@ async function fetchFacebookGroups(groups: string[], after: Date): Promise<Scrap
 }
 
 /**
- * Keyword search, for when no group is configured. Exactly one call, so no
- * matchesTopic pass: `q` already went to the vendor as the query.
+ * Keyword search, for when no group is configured. `q` already went to the
+ * vendor as the query, so no matchesTopic pass. Runs each query as its own
+ * billable call (SocialAPIs charges ~1 credit/call) in parallel, so 2 queries
+ * costs 2x credits but not 2x time.
  */
-async function fetchFacebookSearch(q: string): Promise<ScrapedPost[]> {
-  try {
-    const res = await searchPosts(q);
-    console.log(`discover facebook search:${q}: ${res.unitsCharged} SocialAPIs credit(s)`);
-    return res.posts;
-  } catch (err) {
-    console.error(`discover facebook search:${q}: ${(err as Error).message}`);
-    return [];
-  }
+async function fetchFacebookSearch(queries: string[]): Promise<ScrapedPost[]> {
+  const results = await Promise.all(
+    queries.map(async (q) => {
+      try {
+        const res = await searchPosts(q);
+        console.log(`discover facebook search:${q}: ${res.unitsCharged} SocialAPIs credit(s)`);
+        return res.posts;
+      } catch (err) {
+        console.error(`discover facebook search:${q}: ${(err as Error).message}`);
+        return [];
+      }
+    }),
+  );
+  return results.flat();
 }
 
 /**
@@ -127,11 +135,14 @@ export async function discoverPosts(
   // through). `primaryIntentQuery` wraps the topic in the single best
   // struggling/recommendation-seeking phrasing for the sources that can only
   // afford one query (Reddit's rate courtesy, Facebook's paid credit); the
-  // free, fast sources (HN, Stack Exchange) get three buyer-phrased variants
-  // instead of one, since there's no cost reason to hold back there. See
-  // lib/intent.ts.
+  // free, fast sources (HN, Stack Exchange) get six buyer-phrased variants
+  // instead of one, since there's no cost reason to hold back there. Raw
+  // supply per topic was the bottleneck (2-4 candidates before filtering, so
+  // 5354769's buyer-signal filter often had nothing left to keep) -- more
+  // query variants is the direct fix. See lib/intent.ts.
   const buyerQuery = primaryIntentQuery(q, ctx);
-  const hnSeQueries = intentQueriesFor(q, ctx, 3);
+  const hnSeQueries = intentQueriesFor(q, ctx, 6);
+  const fbQueries = intentQueriesFor(q, ctx, 2);
 
   // Only sources with real free-text keyword search reach the caller without a
   // local topic filter. Arctic Shift's `query` needs a subreddit to scope to;
@@ -169,7 +180,7 @@ export async function discoverPosts(
         ? fetchFacebookGroups(facebook.groups!, after).then((posts) =>
             posts.filter((p) => matchesTopic(p, q)),
           )
-        : fetchFacebookSearch(buyerQuery);
+        : fetchFacebookSearch(fbQueries);
     searches.push(
       Promise.race([
         fb,
