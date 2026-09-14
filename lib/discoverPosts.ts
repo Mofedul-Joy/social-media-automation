@@ -189,11 +189,15 @@ export async function discoverPosts(
     );
   }
 
-  const fresh = (await Promise.all(searches))
-    .flat()
-    .filter((p) => isFresh(p.posted_at, MAX_POST_AGE_DAYS))
-    .filter((p) => !isPromotionalPost(p))
-    .filter((p) => hasBuyerSignal(p));
+  // Logged at each stage so a thin result set can be diagnosed (raw supply vs
+  // filter loss) from function logs instead of guessed at.
+  const raw = (await Promise.all(searches)).flat();
+  const isFreshOnly = raw.filter((p) => isFresh(p.posted_at, MAX_POST_AGE_DAYS));
+  const notPromo = isFreshOnly.filter((p) => !isPromotionalPost(p));
+  const fresh = notPromo.filter((p) => hasBuyerSignal(p));
+  console.log(
+    `discover "${q}": raw=${raw.length} fresh=${isFreshOnly.length} notPromo=${notPromo.length} buyerSignal=${fresh.length}`,
+  );
 
   // Dedupe on external_id. Two sources can surface the same thread (an HN story
   // whose URL is a Reddit post, a group post reposted), and the caller now
