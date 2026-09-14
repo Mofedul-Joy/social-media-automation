@@ -1,5 +1,24 @@
 # Architecture - Social Engagement Automation (Hon Kwok)
 
+> **Version 5, 2026-09-14.** The lookup is now two steps instead of one.
+> `POST /api/topic-search` runs the source fan-out (`lib/discoverPosts.ts`) and
+> returns raw posts with no AI involved. `POST /api/analyze-post` takes one post
+> and makes exactly one call to the VPS worker. The UI lists the posts as soon as
+> the search returns and draws a comment only for the post whose Generate comment
+> button was clicked.
+>
+> Why: v4's `/api/topic-reply` classified every match in the same request, so a
+> search spent an AI call, and sometimes a SocialAPIs credit, on posts nobody
+> opened. A search now costs at most one SocialAPIs HTTP call (one group, retries
+> off) and zero AI calls. `/api/topic-reply` is left in place unchanged and is no
+> longer called by the UI.
+>
+> What this is NOT: there is still no cron, no background job, no queue and no
+> persistence. "Automatic" here means one click, not a schedule. There is still no
+> auto-poster and no login detection. Open post links to the real Reddit, Hacker
+> News, Stack Overflow or Facebook URL, where the human's own session already
+> applies, and the human pastes the comment themselves.
+
 > **Version 4, 2026-09-14 supersedes section 2c below and most of v3.** The system
 > is split three ways: **Vercel** (Next.js UI + API routes), **Supabase** (the one
 > piece of state that survives, the `business_context` row), and the **VPS** kept

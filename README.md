@@ -1,17 +1,23 @@
 # Social Media Engagement Automation
 
-Type a topic, get drafted comments on live posts that are actually worth replying
-to. The system searches public posts **off-account through vendor APIs and public
-archives**, scores each one on two axes (topic relevance AND buyer intent), and
-shows only the survivors with a ready-to-paste comment. **There is no auto-poster** —
-a human copies the comment and posts it from their own logged-in browser.
+Type a topic, see the live posts on it, then draft a comment for the ones worth
+replying to. The system searches public posts **off-account through vendor APIs and
+public archives**, lists them immediately, and drafts a comment **one post at a
+time, only when you click Generate comment**. That draft scores the post on two
+axes (topic relevance AND buyer intent) and returns a ready-to-paste comment.
+**There is no auto-poster**, a human copies the comment and posts it from their own
+logged-in browser.
 
 Client: **Hon Kwok** - built by Mofedul Joy.
 
 ## Architecture (3-way split)
 
 ```
- browser ──Basic Auth──▶  Vercel  (Next.js: UI + /api/topic-reply + /api/config)
+ browser ──Basic Auth──▶  Vercel  (Next.js UI)
+                             │   /api/topic-search   step 1, sources only, no AI
+                             │   /api/analyze-post   step 2, one post, one AI call
+                             │   /api/config         the business brief
+                             │   /api/topic-reply    legacy one-shot, nothing calls it
                              │
                              ├──▶ Supabase        business_context row (the AI brief)
                              │
@@ -31,6 +37,15 @@ authenticated by `CLAUDE_CODE_OAUTH_TOKEN`, so classification bills against Hon'
 flat Claude subscription instead of a metered API key. Serverless cannot run that
 binary. `worker/server.ts` is the entire remaining VPS surface: one authenticated
 `POST /analyze` plus an unauthenticated `GET /health`. Nothing else.
+
+**Why fetching and drafting are two steps.** The original `/api/topic-reply` did
+both in one request: it searched, then ran the classifier over every match. That
+spent an AI call, and sometimes a SocialAPIs credit, on posts the user never looked
+at. Now `/api/topic-search` lists the raw posts for free and `/api/analyze-post`
+runs the classifier on exactly one post, on an explicit click. A search makes **at
+most one SocialAPIs HTTP call** (one group, no retries) and zero AI calls. There is
+no schedule and no background job behind either route: nothing runs unless a human
+clicks. `/api/topic-reply` still exists, unchanged, but the UI no longer calls it.
 
 **Why nothing is persisted but the config.** Lookups are on-demand and ephemeral.
 The old batch-discovery job, candidates queue, approve/skip flow and Google Sheets
@@ -65,6 +80,7 @@ are then polled directly. Search finds groups, groups find posts.
 | Path | Runs on | What |
 |---|---|---|
 | `app/` | Vercel | UI + API routes |
+| `lib/discoverPosts.ts` | Vercel | the shared source fan-out both lookup routes use |
 | `middleware.ts` | Vercel Edge | Basic Auth on every page and route |
 | `lib/config.ts`, `lib/supabaseClient.ts` | Vercel | business context in Supabase |
 | `lib/sources/*` | Vercel | the off-account search adapters |

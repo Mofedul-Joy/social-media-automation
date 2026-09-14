@@ -1,5 +1,5 @@
 import type { ScrapedPost, SourceResult } from "../types";
-import { getJson, externalIdFromUrl } from "./http";
+import { getJson, externalIdFromUrl, stripHtml } from "./http";
 
 /**
  * Stack Overflow, via the free public Stack Exchange API. No key, no vendor
@@ -14,10 +14,6 @@ import { getJson, externalIdFromUrl } from "./http";
  */
 
 const BASE = "https://api.stackexchange.com/2.3";
-
-function stripHtml(html: string): string {
-  return html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
-}
 
 interface SeQuestion {
   question_id: number;

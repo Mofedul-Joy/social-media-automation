@@ -62,6 +62,29 @@ export function externalIdFromUrl(url: string): string {
   }
 }
 
+/**
+ * Plain text out of a source that returns HTML. Both Algolia's HN index and the
+ * Stack Exchange API hand back rendered markup, which is noise in the AI prompt
+ * and visible junk now that the raw post body is shown in the list before any
+ * comment is drafted.
+ */
+const ENTITIES: Record<string, string> = {
+  "&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": '"', "&#39;": "'", "&#x27;": "'", "&nbsp;": " ",
+};
+const TAGS = /<[^>]+>/g;
+const ENTITY = /&(?:amp|lt|gt|quot|#39|#x27|nbsp);/g;
+export function stripHtml(html: string): string {
+  // Tags, then entities, then tags again. Algolia's HN text mixes real markup
+  // with entity-escaped markup, so decoding &lt;p&gt; turns it into a tag that
+  // a single pass has already gone past. The second pass catches those.
+  return html
+    .replace(TAGS, " ")
+    .replace(ENTITY, (m) => ENTITIES[m] ?? m)
+    .replace(TAGS, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 /** Posts older than this are not worth commenting on. */
 export function isFresh(iso: string | undefined, maxAgeDays: number): boolean {
   if (!iso) return true; // source gave no timestamp; let the AI judge

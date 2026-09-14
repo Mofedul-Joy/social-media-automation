@@ -17,8 +17,8 @@ export default function Page() {
         <div>
           <h1>Engagement Console</h1>
           <div className="sub">
-            Type a topic, get drafted comments on live posts. Ranked by buyer intent, not topic
-            match. No auto-poster: you copy the comment and post it yourself.
+            Search live posts on a topic, then draft a comment only for the ones worth replying
+            to. No auto-poster: you copy the comment and post it yourself.
           </div>
         </div>
       </header>
