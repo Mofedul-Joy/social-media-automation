@@ -1,180 +1,95 @@
+@import "tailwindcss";
+
 :root {
-  --bg: #0b0d10;
-  --panel: #14171c;
-  --panel-2: #1b1f26;
-  --border: #262b33;
-  --text: #e6e9ee;
-  --muted: #9aa4b2;
-  --accent: #4f8cff;
-  --green: #2ecc71;
-  --green-bg: #14231a;
+  /* dark premium palette (rose primary + engagement blue accent) */
+  --bg: #08080c;
+  --bg-2: #0d0d14;
+  --panel: rgba(255, 255, 255, 0.04);
+  --panel-strong: rgba(255, 255, 255, 0.06);
+  --border: rgba(255, 255, 255, 0.09);
+  --border-strong: rgba(255, 255, 255, 0.16);
+  --text: #f4f4f7;
+  --muted: #9a9aae;
+  --faint: #6b6b80;
+  --primary: #e11d48;
+  --primary-2: #fb7185;
+  --accent: #2563eb;
+  --accent-2: #60a5fa;
+  --reddit: #ff4500;
+  --facebook: #1877f2;
+  --instagram: #e1306c;
+  --hackernews: #ff6600;
+  --stackexchange: #f48024;
+  --threads: #8a8a8a;
+  --green: #22c55e;
   --red: #ff6b6b;
-  --red-bg: #241618;
-  --amber: #f5a524;
-  --radius: 12px;
 }
 
-* { box-sizing: border-box; }
+* { -webkit-font-smoothing: antialiased; }
 
-html, body {
-  margin: 0;
-  padding: 0;
-  background: var(--bg);
-  color: var(--text);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  font-size: 15px;
-  line-height: 1.5;
+html, body { background: var(--bg); color: var(--text); }
+
+body {
+  font-family: var(--font-dm-sans), system-ui, -apple-system, sans-serif;
+  min-height: 100dvh;
+  background:
+    radial-gradient(900px 500px at 15% -10%, rgba(225, 29, 72, 0.18), transparent 60%),
+    radial-gradient(800px 500px at 100% 0%, rgba(37, 99, 235, 0.16), transparent 55%),
+    radial-gradient(700px 600px at 50% 120%, rgba(147, 51, 234, 0.10), transparent 60%),
+    var(--bg);
+  background-attachment: fixed;
 }
 
-a { color: var(--accent); text-decoration: none; }
-a:hover { text-decoration: underline; }
+/* ---- scrollbar ---- */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 999px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); }
 
-.wrap { max-width: 980px; margin: 0 auto; padding: 32px 20px 80px; }
-
-header.top {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 24px;
-  flex-wrap: wrap;
-}
-header.top h1 { font-size: 20px; margin: 0; letter-spacing: -0.01em; }
-header.top .sub { color: var(--muted); font-size: 13px; margin-top: 2px; }
-
-.row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-
-.btn {
+/* ---- reusable primitives ---- */
+.glass {
+  background: linear-gradient(180deg, rgba(255,255,255,0.055), rgba(255,255,255,0.02));
   border: 1px solid var(--border);
-  background: var(--panel-2);
-  color: var(--text);
-  padding: 8px 14px;
-  border-radius: 8px;
-  font-size: 14px;
-  cursor: pointer;
-  transition: border-color .15s, background .15s, transform .05s;
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
 }
-.btn:hover { border-color: #3a424e; }
-.btn:active { transform: translateY(1px); }
+
+.card-hover { transition: transform .25s cubic-bezier(.2,.7,.2,1), border-color .25s, box-shadow .25s; }
+.card-hover:hover {
+  transform: translateY(-4px);
+  border-color: var(--border-strong);
+  box-shadow: 0 20px 50px -20px rgba(0,0,0,0.7);
+}
+
+.gradient-text {
+  background: linear-gradient(100deg, #fff 10%, var(--primary-2) 55%, var(--accent-2) 100%);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+
+.btn { transition: all .18s ease; cursor: pointer; }
+.btn:active { transform: scale(.97); }
 .btn:disabled { opacity: .5; cursor: not-allowed; }
-.btn.primary { background: var(--accent); border-color: var(--accent); color: #06101f; font-weight: 600; }
-.btn.approve { background: var(--green-bg); border-color: #1f5c39; color: var(--green); }
-.btn.approve:hover { border-color: var(--green); }
-.btn.skip { background: var(--red-bg); border-color: #5c2226; color: var(--red); }
-.btn.skip:hover { border-color: var(--red); }
-.btn.done { background: var(--accent); border-color: var(--accent); color: #06101f; font-weight: 600; }
 
-.tabs { display: flex; gap: 6px; margin-bottom: 20px; flex-wrap: wrap; }
-.tab {
-  padding: 6px 12px; border-radius: 999px; border: 1px solid var(--border);
-  background: transparent; color: var(--muted); font-size: 13px; cursor: pointer;
+.btn-primary {
+  background: linear-gradient(100deg, var(--primary), #f43f5e);
+  color: #fff; box-shadow: 0 8px 24px -8px rgba(225,29,72,0.6);
 }
-.tab.active { background: var(--panel-2); color: var(--text); border-color: #3a424e; }
-.tab .count { color: var(--muted); margin-left: 6px; font-variant-numeric: tabular-nums; }
+.btn-primary:hover:not(:disabled) { box-shadow: 0 10px 30px -6px rgba(225,29,72,0.75); filter: brightness(1.06); }
 
-.card {
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 18px;
-  margin-bottom: 14px;
-}
-.card .meta { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
-
-.pill {
-  font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
-  padding: 3px 8px; border-radius: 6px; border: 1px solid var(--border); color: var(--muted);
-}
-.pill.reddit { color: #ff8b60; border-color: #6b3a2a; }
-.pill.facebook { color: #6ea8ff; border-color: #2a3f6b; }
-.pill.instagram { color: #ff7ac2; border-color: #6b2a52; }
-.pill.threads { color: #c9b7ff; border-color: #453a6b; }
-.pill.hackernews { color: #ff9b3a; border-color: #6b4a1f; }
-.pill.stackexchange { color: #6bc7ff; border-color: #1f4a6b; }
-.pill.cat { color: var(--text); }
-/* Intent is the score that decides whether a post is worth a human's time,
-   so it reads first and relevance sits behind it. */
-.rel { margin-left: auto; font-size: 12px; color: var(--text); font-variant-numeric: tabular-nums; }
-.rel.dim { margin-left: 10px; color: var(--muted); }
-.query { margin: 2px 0 8px; font-size: 12px; color: var(--muted); }
-
-.card h3 { margin: 0 0 6px; font-size: 15px; }
-.card .summary { color: var(--muted); font-size: 13px; margin: 0 0 12px; }
-
-.comment {
-  width: 100%; min-height: 84px; resize: vertical;
-  background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
-  color: var(--text); padding: 10px 12px; font: inherit; font-size: 14px;
-  margin-bottom: 12px;
-}
-.comment:focus { outline: none; border-color: var(--accent); }
-
-.actions { display: flex; gap: 10px; align-items: center; }
-.actions .src { margin-left: auto; font-size: 12px; }
-
-.empty { text-align: center; color: var(--muted); padding: 60px 20px; }
-.toast {
-  position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
-  background: var(--panel-2); border: 1px solid var(--border); padding: 10px 16px;
-  border-radius: 8px; font-size: 13px;
-}
-.statbar { color: var(--muted); font-size: 12px; }
-
-/* --- two-step lookup: raw post, then a drafted comment on request ---------- */
-
-/* A listed post shows its own text until a comment exists, clamped so a long
-   Reddit body cannot push the Generate button off the screen. */
-.card .excerpt {
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  white-space: pre-wrap;
-}
-/* The drafted comment is the thing the human acts on, so it reads at full
-   strength while the post's own text stays muted behind it. */
-.card .drafted { color: var(--text); }
-
-/* Mid-request the button keeps a readable label. The plain :disabled fade
-   would drop dark-on-accent text well under AA, which is the one state a
-   user is actually staring at. */
-.btn.working,
-.btn.working:disabled {
-  opacity: 1;
-  background: var(--panel-2);
-  border-color: #3a424e;
-  color: var(--text);
-  cursor: progress;
+.grain::before {
+  content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 1; opacity: .35;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E");
 }
 
-.spinner {
-  display: inline-block;
-  width: 12px;
-  height: 12px;
-  margin-right: 8px;
-  vertical-align: -2px;
-  border: 2px solid var(--border);
-  border-top-color: var(--text);
-  border-radius: 50%;
-  animation: spin .7s linear infinite;
+@keyframes shimmer { 100% { transform: translateX(100%); } }
+.skeleton { position: relative; overflow: hidden; background: rgba(255,255,255,0.05); }
+.skeleton::after {
+  content: ""; position: absolute; inset: 0; transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.08), transparent);
+  animation: shimmer 1.4s infinite;
 }
-@keyframes spin { to { transform: rotate(360deg); } }
 
-/* Placeholder shaped like the comment that is about to land, so the card does
-   not jump when it arrives. */
-.skeleton-block { display: flex; flex-direction: column; gap: 8px; margin: 0 0 12px; }
-.skeleton {
-  height: 12px;
-  border-radius: 6px;
-  background: linear-gradient(90deg, var(--panel-2), #262b33, var(--panel-2));
-  background-size: 200% 100%;
-  animation: shimmer 1.4s linear infinite;
-}
-@keyframes shimmer { to { background-position: -200% 0; } }
+@keyframes spin-slow { to { transform: rotate(360deg); } }
 
 @media (prefers-reduced-motion: reduce) {
-  /* Still moves, because a stalled spinner reads as a hung request, just slow
-     enough not to be the thing you notice. */
-  .spinner { animation-duration: 2.4s; }
-  .skeleton { animation: none; background: var(--panel-2); }
+  * { animation-duration: .001ms !important; transition-duration: .01ms !important; }
 }
