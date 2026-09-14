@@ -10,13 +10,56 @@ import type { BusinessContext } from "./types";
  */
 const ROW_ID = 1;
 
+/**
+ * Per-attempt ceiling. Supabase has no timeout of its own here, and the
+ * function's own execution budget is what kills a hung read — so two attempts
+ * must fit well inside it, or a slow failure returns the same bare 500 this
+ * retry exists to remove.
+ */
+const ATTEMPT_TIMEOUT_MS = 3_000;
+
+async function withTimeout<T>(run: () => Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  try {
+    return await Promise.race([
+      run(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`supabase read timed out after ${ATTEMPT_TIMEOUT_MS}ms`)), ATTEMPT_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer!);
+  }
+}
+
+/**
+ * One retry on failure. Reads here fail intermittently in production — a
+ * transient Supabase/network blip on an otherwise healthy project, measured at
+ * roughly 1 request in 20 — and a single retry turns that into a non-event
+ * rather than a failed dashboard load. A permanent failure (bad key, missing
+ * table) costs one wasted call, which is the accepted price of that.
+ */
+async function retryOnce<T>(run: () => Promise<T>): Promise<T> {
+  try {
+    return await withTimeout(run);
+  } catch (err) {
+    // Logged, not swallowed: if the retry also fails for a different reason,
+    // this is the only place the first cause is ever visible.
+    console.warn(`config store: first attempt failed, retrying: ${(err as Error).message}`);
+    return await withTimeout(run);
+  }
+}
+
 export async function loadBusinessContext(): Promise<BusinessContext> {
-  const { data, error } = await getSupabase()
-    .from("business_context")
-    .select("context")
-    .eq("id", ROW_ID)
-    .maybeSingle();
-  if (error) throw error;
+  const data = await retryOnce(async () => {
+    const { data, error } = await getSupabase()
+      .from("business_context")
+      .select("context")
+      .eq("id", ROW_ID)
+      .maybeSingle();
+    if (error) throw error;
+    return data;
+  });
   return (data?.context as BusinessContext) ?? (exampleContext as unknown as BusinessContext);
 }
 
@@ -28,11 +71,14 @@ export async function saveBusinessContext(ctx: BusinessContext): Promise<void> {
 }
 
 export async function isConfigured(): Promise<boolean> {
-  const { data, error } = await getSupabase()
-    .from("business_context")
-    .select("id")
-    .eq("id", ROW_ID)
-    .maybeSingle();
-  if (error) throw error;
+  const data = await retryOnce(async () => {
+    const { data, error } = await getSupabase()
+      .from("business_context")
+      .select("id")
+      .eq("id", ROW_ID)
+      .maybeSingle();
+    if (error) throw error;
+    return data;
+  });
   return !!data;
 }
