@@ -15,8 +15,15 @@ const ROW_ID = 1;
  * function's own execution budget is what kills a hung read — so two attempts
  * must fit well inside it, or a slow failure returns the same bare 500 this
  * retry exists to remove.
+ *
+ * Was 3_000: direct REST calls to the same Supabase project from outside
+ * Vercel consistently complete in 0.2-0.5s, but requests from the deployed
+ * function were timing out on both attempts back to back (measured live,
+ * 2026-09-14) — a too-tight budget killing an otherwise-working but slower
+ * connection (e.g. cold-start/IPv6 path overhead on Vercel's network), not a
+ * genuinely hung one. Raised to give a real-but-slow connection room to land.
  */
-const ATTEMPT_TIMEOUT_MS = 3_000;
+const ATTEMPT_TIMEOUT_MS = 8_000;
 
 async function withTimeout<T>(run: () => Promise<T>): Promise<T> {
   let timer: ReturnType<typeof setTimeout>;

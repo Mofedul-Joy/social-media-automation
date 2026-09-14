@@ -2,6 +2,10 @@ import { NextResponse } from "next/server";
 import { loadBusinessContext, saveBusinessContext, isConfigured } from "@/lib/config";
 
 export const dynamic = "force-dynamic";
+// Two Supabase attempts at 8s each (lib/config.ts) must fit inside this, or
+// Vercel's own default duration limit kills the request before the retry
+// this route relies on ever gets to run.
+export const maxDuration = 30;
 
 export async function GET() {
   // Without this, a Supabase read failure throws and Next answers with a bare
