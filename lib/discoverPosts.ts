@@ -14,7 +14,14 @@ import type { BusinessContext, ScrapedPost, SourceResult } from "@/lib/types";
  * not, so the two halves are separated and the AI call is paid for per click.
  */
 
-const MAX_POST_AGE_DAYS = Number(process.env.MAX_POST_AGE_DAYS ?? 14);
+// Diagnostic logging (65018db) measured raw=41-103 candidates for real topics
+// ("lead generation", "marketing automation") with fresh=0 -- every single
+// one died at this cutoff, not at the seller/buyer-signal filters below it.
+// HN's search is already date-sorted (see hackernews.ts), so those 30 hits
+// per query genuinely are the most recent HN has, and they're still >14 days
+// old: this topic space just doesn't post that often. 14 was too tight for
+// the actual posting frequency; widened to 30.
+const MAX_POST_AGE_DAYS = Number(process.env.MAX_POST_AGE_DAYS ?? 30);
 /** Default page size. One `claude` CLI child process each for the legacy route. */
 export const MAX_RESULTS = 5;
 /**
@@ -190,13 +197,16 @@ export async function discoverPosts(
   }
 
   // Logged at each stage so a thin result set can be diagnosed (raw supply vs
-  // filter loss) from function logs instead of guessed at.
+  // filter loss, and which source it came from) from function logs instead of
+  // guessed at.
   const raw = (await Promise.all(searches)).flat();
+  const byPlatform: Record<string, number> = {};
+  for (const p of raw) byPlatform[p.platform] = (byPlatform[p.platform] ?? 0) + 1;
   const isFreshOnly = raw.filter((p) => isFresh(p.posted_at, MAX_POST_AGE_DAYS));
   const notPromo = isFreshOnly.filter((p) => !isPromotionalPost(p));
   const fresh = notPromo.filter((p) => hasBuyerSignal(p));
   console.log(
-    `discover "${q}": raw=${raw.length} fresh=${isFreshOnly.length} notPromo=${notPromo.length} buyerSignal=${fresh.length}`,
+    `discover "${q}": raw=${raw.length} (${JSON.stringify(byPlatform)}) fresh=${isFreshOnly.length} notPromo=${notPromo.length} buyerSignal=${fresh.length}`,
   );
 
   // Dedupe on external_id. Two sources can surface the same thread (an HN story
