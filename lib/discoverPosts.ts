@@ -3,6 +3,7 @@ import { searchHackerNews } from "@/lib/sources/hackernews";
 import { searchStackOverflow } from "@/lib/sources/stackexchange";
 import { groupPosts, searchPosts } from "@/lib/sources/socialapis";
 import { isFresh } from "@/lib/sources/http";
+import { intentQueriesFor, primaryIntentQuery } from "@/lib/intent";
 import type { BusinessContext, ScrapedPost, SourceResult } from "@/lib/types";
 
 /**
@@ -117,6 +118,17 @@ export async function discoverPosts(
 ): Promise<ScrapedPost[]> {
   const q = topic.trim();
 
+  // The literal topic surfaces whoever publishes about it, which is
+  // overwhelmingly sellers/marketers SEO'd around that exact phrase, not
+  // buyers. `primaryIntentQuery` wraps it in the single best buyer-signal
+  // phrasing ("need help with {topic}") for the sources that can only afford
+  // one query (Reddit's rate courtesy, Facebook's paid credit); the free, fast
+  // sources (HN, Stack Exchange) also get a couple more buyer-phrased variants
+  // alongside the literal query, since there's no cost reason to hold back
+  // there. See lib/intent.ts.
+  const buyerQuery = primaryIntentQuery(q, ctx);
+  const hnSeQueries = Array.from(new Set([q, ...intentQueriesFor(q, ctx, 2)]));
+
   // Only sources with real free-text keyword search reach the caller without a
   // local topic filter. Arctic Shift's `query` needs a subreddit to scope to;
   // Facebook's group feed has no query at all, so those posts are filtered by
@@ -125,14 +137,14 @@ export async function discoverPosts(
   const facebook = ctx.platforms?.facebook;
   const after = new Date(Date.now() - MAX_POST_AGE_DAYS * 86400_000);
   const searches = [
-    safeSearch("hackernews", () => searchHackerNews(q)),
-    safeSearch("stackexchange", () => searchStackOverflow(q)),
+    ...hnSeQueries.map((hq) => safeSearch(`hackernews:${hq}`, () => searchHackerNews(hq))),
+    ...hnSeQueries.map((hq) => safeSearch(`stackexchange:${hq}`, () => searchStackOverflow(hq))),
   ];
   if (reddit?.enabled && (reddit.subreddits?.length ?? 0) > 0) {
     searches.push(
       Promise.race([
         safeSearch("reddit", () =>
-          searchReddit(q, { subreddits: reddit.subreddits!.slice(0, MAX_LIVE_SUBREDDITS) }),
+          searchReddit(buyerQuery, { subreddits: reddit.subreddits!.slice(0, MAX_LIVE_SUBREDDITS) }),
         ),
         new Promise<ScrapedPost[]>((r) => setTimeout(() => r([]), REDDIT_BUDGET_MS)),
       ]),
@@ -144,7 +156,7 @@ export async function discoverPosts(
         ? fetchFacebookGroups(facebook.groups!, after).then((posts) =>
             posts.filter((p) => matchesTopic(p, q)),
           )
-        : fetchFacebookSearch(q);
+        : fetchFacebookSearch(buyerQuery);
     searches.push(
       Promise.race([
         fb,

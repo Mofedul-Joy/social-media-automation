@@ -103,3 +103,32 @@ export function queriesFor(
   if (cfg?.search_terms?.length) return cfg.search_terms.slice(0, limit);
   return intentQueries(ctx, limit);
 }
+
+/**
+ * Same frame treatment as intentQueries, applied to ONE ad-hoc topic (what a
+ * human types into a free-text search box on demand) instead of the
+ * configured ctx.topics list. So typing "AI agent" doesn't search that
+ * literal phrase -- it searches "need help with AI agent" and its siblings.
+ */
+export function intentQueriesFor(topic: string, ctx: BusinessContext, limit?: number): string[] {
+  const t = topic.trim();
+  if (!t) return [];
+  const qs = dedupe(framesOf(ctx).map((f) => f.replace(/\{topic\}/g, t)));
+  return limit && limit > 0 ? qs.slice(0, limit) : qs;
+}
+
+/**
+ * The single most universally-readable buyer-signal phrasing, for a caller
+ * that can only afford exactly one query -- a paid API call (Facebook), or a
+ * source under a tight time budget (Reddit, already at its rate-courtesy
+ * ceiling). Picking a fixed frame instead of frames[0] because SERVICE_FRAMES
+ * is ordered for the batch matrix in intentQueries/queriesFor (unaffected by
+ * this), not for "best single pick" -- some of those frames ("who can build
+ * {topic}") read badly against an arbitrary typed phrase.
+ */
+export function primaryIntentQuery(topic: string, ctx: BusinessContext): string {
+  const t = topic.trim();
+  if (!t) return t;
+  const frame = (ctx.intent_mode ?? "both") === "product" ? "looking to buy {topic}" : "need help with {topic}";
+  return frame.replace(/\{topic\}/g, t);
+}
