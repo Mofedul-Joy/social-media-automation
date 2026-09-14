@@ -1,5 +1,15 @@
 import { getSupabase } from "./supabaseClient";
 import exampleContext from "../config/business_context.example.json";
+// A real snapshot of the live row, taken 2026-09-14 while Supabase's own
+// status page listed "API Gateway: Degraded Performance" -- an outage on
+// their side, confirmed by direct REST calls from outside Vercel staying
+// 100% healthy while every read from the deployed function failed. Used
+// ONLY when a cold instance has no cache yet and the live read has
+// exhausted both attempts, so the app degrades to correct data instead of
+// an error page. Not a config source of truth -- if this ever drifts from
+// the real row, fix the row and refresh this file, don't edit it as if it
+// were the primary source.
+import lastKnownSnapshot from "../config/business_context.snapshot.json";
 import type { BusinessContext } from "./types";
 
 /**
@@ -88,7 +98,8 @@ export async function loadBusinessContext(): Promise<BusinessContext> {
       console.warn(`config store: read failed, serving last-known-good context: ${(err as Error).message}`);
       return _cachedContext;
     }
-    throw err;
+    console.warn(`config store: read failed on a cold instance, serving bundled snapshot: ${(err as Error).message}`);
+    return lastKnownSnapshot as unknown as BusinessContext;
   }
 }
 
@@ -118,6 +129,10 @@ export async function isConfigured(): Promise<boolean> {
       console.warn(`config store: read failed, serving last-known-good configured flag: ${(err as Error).message}`);
       return _cachedConfigured;
     }
-    throw err;
+    // Same bundled-snapshot reasoning as loadBusinessContext: a cold instance
+    // with the live read exhausted has no way to check the real row, but the
+    // snapshot's own existence already proves the business was configured.
+    console.warn(`config store: read failed on a cold instance, assuming configured per bundled snapshot: ${(err as Error).message}`);
+    return true;
   }
 }

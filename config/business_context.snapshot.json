@@ -1,0 +1,62 @@
+{
+  "business_name": "Hon Social",
+  "description": "A small agency that sets up social media engagement automation for small businesses: it finds conversations where the business could genuinely help, and drafts useful replies for a human to approve before posting.",
+  "target_audience": "Small business owners, founders and solo marketers who are trying to get customers from social media and are short on time.",
+  "keywords": [
+    "social media automation",
+    "marketing automation",
+    "lead generation",
+    "get more customers",
+    "social media marketing",
+    "engagement"
+  ],
+  "comment_tone": "Plain, helpful and specific. Short sentences. Answer the question first, mention what we do only if it is directly relevant.",
+  "avoid": [
+    "do not spam",
+    "do not pitch in the first reply",
+    "no fake testimonials",
+    "no medical, legal or financial advice"
+  ],
+  "platforms": {
+    "reddit": {
+      "enabled": true,
+      "subreddits": ["smallbusiness", "marketing"],
+      "search_terms": ["social media automation", "marketing automation"]
+    },
+    "facebook": {
+      "enabled": true,
+      "pages": [],
+      "groups": [],
+      "search_terms": []
+    },
+    "instagram": {
+      "enabled": false,
+      "hashtags": [],
+      "search_terms": []
+    },
+    "threads": {
+      "enabled": false,
+      "search_terms": [],
+      "max_queries": 8
+    },
+    "hackernews": {
+      "enabled": true,
+      "search_terms": ["marketing automation", "social media"],
+      "max_queries": 5
+    },
+    "stackexchange": {
+      "enabled": false,
+      "search_terms": [],
+      "max_queries": 5
+    }
+  },
+  "relevance_threshold": 0.5,
+  "topics": [
+    "social media marketing for small business",
+    "getting customers from online communities",
+    "marketing automation",
+    "lead generation"
+  ],
+  "intent_mode": "service",
+  "intent_threshold": 0.4
+}
