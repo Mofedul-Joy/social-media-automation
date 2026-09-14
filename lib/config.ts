@@ -57,17 +57,39 @@ async function retryOnce<T>(run: () => Promise<T>): Promise<T> {
   }
 }
 
+/**
+ * Last-known-good, kept for the life of the warm serverless instance. A read
+ * that fails after both attempts (live 2026-09-14: an unreliable Vercel ->
+ * Supabase network path, not the database itself — direct REST calls from
+ * outside Vercel stayed 100% healthy throughout) now serves this instead of
+ * erroring, as long as this instance has completed at least one real read.
+ * Still throws on a cold instance with nothing cached yet — there is nothing
+ * safe to serve.
+ */
+let _cachedContext: BusinessContext | null = null;
+let _cachedConfigured: boolean | null = null;
+
 export async function loadBusinessContext(): Promise<BusinessContext> {
-  const data = await retryOnce(async () => {
-    const { data, error } = await getSupabase()
-      .from("business_context")
-      .select("context")
-      .eq("id", ROW_ID)
-      .maybeSingle();
-    if (error) throw error;
-    return data;
-  });
-  return (data?.context as BusinessContext) ?? (exampleContext as unknown as BusinessContext);
+  try {
+    const data = await retryOnce(async () => {
+      const { data, error } = await getSupabase()
+        .from("business_context")
+        .select("context")
+        .eq("id", ROW_ID)
+        .maybeSingle();
+      if (error) throw error;
+      return data;
+    });
+    const ctx = (data?.context as BusinessContext) ?? (exampleContext as unknown as BusinessContext);
+    _cachedContext = ctx;
+    return ctx;
+  } catch (err) {
+    if (_cachedContext) {
+      console.warn(`config store: read failed, serving last-known-good context: ${(err as Error).message}`);
+      return _cachedContext;
+    }
+    throw err;
+  }
 }
 
 export async function saveBusinessContext(ctx: BusinessContext): Promise<void> {
@@ -75,17 +97,27 @@ export async function saveBusinessContext(ctx: BusinessContext): Promise<void> {
     .from("business_context")
     .upsert({ id: ROW_ID, context: ctx, updated_at: new Date().toISOString() });
   if (error) throw error;
+  _cachedContext = ctx;
 }
 
 export async function isConfigured(): Promise<boolean> {
-  const data = await retryOnce(async () => {
-    const { data, error } = await getSupabase()
-      .from("business_context")
-      .select("id")
-      .eq("id", ROW_ID)
-      .maybeSingle();
-    if (error) throw error;
-    return data;
-  });
-  return !!data;
+  try {
+    const data = await retryOnce(async () => {
+      const { data, error } = await getSupabase()
+        .from("business_context")
+        .select("id")
+        .eq("id", ROW_ID)
+        .maybeSingle();
+      if (error) throw error;
+      return data;
+    });
+    _cachedConfigured = !!data;
+    return _cachedConfigured;
+  } catch (err) {
+    if (_cachedConfigured !== null) {
+      console.warn(`config store: read failed, serving last-known-good configured flag: ${(err as Error).message}`);
+      return _cachedConfigured;
+    }
+    throw err;
+  }
 }
