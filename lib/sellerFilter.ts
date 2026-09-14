@@ -45,3 +45,30 @@ export function isPromotionalPost(post: ScrapedPost): boolean {
   const text = `${post.title ?? ""} ${post.body}`;
   return SELLER_PATTERNS.some((re) => re.test(text));
 }
+
+/**
+ * Absence of a seller phrase isn't presence of a buyer one -- plenty of
+ * off-topic or third-person content matches neither list. This is the other
+ * half: the post must itself read as the author asking, not just fail to
+ * read as a pitch.
+ */
+const BUYER_SIGNAL_PATTERNS: RegExp[] = [
+  /\?/,
+  /\bi'?m (struggling|frustrated|stuck|having trouble)\b/i,
+  /\bi (need|could use) (some )?help\b/i,
+  /\bcan (anyone|someone|you guys|you all)\b/i,
+  /\bdoes anyone (know|have)\b/i,
+  /\bany(one)? (recommendations?|advice|tips|suggestions)\b/i,
+  /\bhow do (i|you)\b/i,
+  /\bwhat'?s the best way\b/i,
+  /\blooking for (advice|recommendations?|suggestions|help)\b/i,
+  /\bwould appreciate\b/i,
+  /\bhelp me\b/i,
+  /\bwhat should i (do|use)\b/i,
+];
+
+/** True if the post itself reads as the author asking, not just describing. */
+export function hasBuyerSignal(post: ScrapedPost): boolean {
+  const text = `${post.title ?? ""} ${post.body}`;
+  return BUYER_SIGNAL_PATTERNS.some((re) => re.test(text));
+}

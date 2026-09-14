@@ -4,7 +4,7 @@ import { searchStackOverflow } from "@/lib/sources/stackexchange";
 import { groupPosts, searchPosts } from "@/lib/sources/socialapis";
 import { isFresh } from "@/lib/sources/http";
 import { intentQueriesFor, primaryIntentQuery } from "@/lib/intent";
-import { isPromotionalPost } from "@/lib/sellerFilter";
+import { isPromotionalPost, hasBuyerSignal } from "@/lib/sellerFilter";
 import type { BusinessContext, ScrapedPost, SourceResult } from "@/lib/types";
 
 /**
@@ -140,10 +140,19 @@ export async function discoverPosts(
   const reddit = ctx.platforms?.reddit;
   const facebook = ctx.platforms?.facebook;
   const after = new Date(Date.now() - MAX_POST_AGE_DAYS * 86400_000);
-  const searches = [
-    ...hnSeQueries.map((hq) => safeSearch(`hackernews:${hq}`, () => searchHackerNews(hq))),
-    ...hnSeQueries.map((hq) => safeSearch(`stackexchange:${hq}`, () => searchStackOverflow(hq))),
-  ];
+  const hackernews = ctx.platforms?.hackernews;
+  const stackexchange = ctx.platforms?.stackexchange;
+  const searches: Promise<ScrapedPost[]>[] = [];
+  if (hackernews?.enabled) {
+    searches.push(
+      ...hnSeQueries.map((hq) => safeSearch(`hackernews:${hq}`, () => searchHackerNews(hq))),
+    );
+  }
+  if (stackexchange?.enabled) {
+    searches.push(
+      ...hnSeQueries.map((hq) => safeSearch(`stackexchange:${hq}`, () => searchStackOverflow(hq))),
+    );
+  }
   if (reddit?.enabled && (reddit.subreddits?.length ?? 0) > 0) {
     searches.push(
       Promise.race([
@@ -172,7 +181,8 @@ export async function discoverPosts(
   const fresh = (await Promise.all(searches))
     .flat()
     .filter((p) => isFresh(p.posted_at, MAX_POST_AGE_DAYS))
-    .filter((p) => !isPromotionalPost(p));
+    .filter((p) => !isPromotionalPost(p))
+    .filter((p) => hasBuyerSignal(p));
 
   // Dedupe on external_id. Two sources can surface the same thread (an HN story
   // whose URL is a Reddit post, a group post reposted), and the caller now
