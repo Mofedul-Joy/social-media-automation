@@ -27,18 +27,26 @@ const PRODUCT_FRAMES = [
   "is {topic} worth it",
 ];
 
-/** Someone about to hire help. */
+/**
+ * Someone facing a problem and asking the room, not necessarily ready to hire
+ * a contractor yet. Swapped away from "hire a developer to build X" phrasing
+ * (too narrow — reads like a software-dev gig board, not how someone actually
+ * struggling with marketing/ops talks) toward the struggling-and-asking-for-a-
+ * recommendation pattern that's the actual buyer signal: someone describing
+ * their problem and wanting a solution recommended, the same shape as a
+ * product recommendation request, just for a service-shaped problem.
+ */
 const SERVICE_FRAMES = [
-  "looking for someone to build {topic}",
-  "need help with {topic}",
-  "how do I build {topic}",
-  "anyone know a good {topic} developer",
-  "hire someone for {topic}",
-  "recommendations for {topic} agency",
   "struggling with {topic}",
-  "is there a service for {topic}",
-  "quotes for {topic}",
-  "who can build {topic}",
+  "need help with {topic}",
+  "any recommendations for {topic}",
+  "frustrated with {topic}",
+  "having trouble with {topic}",
+  "what's a good way to handle {topic}",
+  "how do you deal with {topic}",
+  "anyone else dealing with {topic}",
+  "looking for advice on {topic}",
+  "is there a better way to do {topic}",
 ];
 
 /** Topic nouns on their own. Kept only as the measurement baseline. */
@@ -129,6 +137,6 @@ export function intentQueriesFor(topic: string, ctx: BusinessContext, limit?: nu
 export function primaryIntentQuery(topic: string, ctx: BusinessContext): string {
   const t = topic.trim();
   if (!t) return t;
-  const frame = (ctx.intent_mode ?? "both") === "product" ? "looking to buy {topic}" : "need help with {topic}";
+  const frame = (ctx.intent_mode ?? "both") === "product" ? "{topic} recommendations" : "struggling with {topic}";
   return frame.replace(/\{topic\}/g, t);
 }

@@ -120,14 +120,17 @@ export async function discoverPosts(
 
   // The literal topic surfaces whoever publishes about it, which is
   // overwhelmingly sellers/marketers SEO'd around that exact phrase, not
-  // buyers. `primaryIntentQuery` wraps it in the single best buyer-signal
-  // phrasing ("need help with {topic}") for the sources that can only afford
-  // one query (Reddit's rate courtesy, Facebook's paid credit); the free, fast
-  // sources (HN, Stack Exchange) also get a couple more buyer-phrased variants
-  // alongside the literal query, since there's no cost reason to hold back
-  // there. See lib/intent.ts.
+  // buyers -- so it is never sent to any source, not even alongside better
+  // phrasing (an earlier version kept it for HN/Stack Exchange "for volume";
+  // dropped after client feedback that literal-keyword results still leaked
+  // through). `primaryIntentQuery` wraps the topic in the single best
+  // struggling/recommendation-seeking phrasing for the sources that can only
+  // afford one query (Reddit's rate courtesy, Facebook's paid credit); the
+  // free, fast sources (HN, Stack Exchange) get three buyer-phrased variants
+  // instead of one, since there's no cost reason to hold back there. See
+  // lib/intent.ts.
   const buyerQuery = primaryIntentQuery(q, ctx);
-  const hnSeQueries = Array.from(new Set([q, ...intentQueriesFor(q, ctx, 2)]));
+  const hnSeQueries = intentQueriesFor(q, ctx, 3);
 
   // Only sources with real free-text keyword search reach the caller without a
   // local topic filter. Arctic Shift's `query` needs a subreddit to scope to;
