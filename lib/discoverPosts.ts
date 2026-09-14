@@ -4,6 +4,7 @@ import { searchStackOverflow } from "@/lib/sources/stackexchange";
 import { groupPosts, searchPosts } from "@/lib/sources/socialapis";
 import { isFresh } from "@/lib/sources/http";
 import { intentQueriesFor, primaryIntentQuery } from "@/lib/intent";
+import { isPromotionalPost } from "@/lib/sellerFilter";
 import type { BusinessContext, ScrapedPost, SourceResult } from "@/lib/types";
 
 /**
@@ -170,7 +171,8 @@ export async function discoverPosts(
 
   const fresh = (await Promise.all(searches))
     .flat()
-    .filter((p) => isFresh(p.posted_at, MAX_POST_AGE_DAYS));
+    .filter((p) => isFresh(p.posted_at, MAX_POST_AGE_DAYS))
+    .filter((p) => !isPromotionalPost(p));
 
   // Dedupe on external_id. Two sources can surface the same thread (an HN story
   // whose URL is a Reddit post, a group post reposted), and the caller now
