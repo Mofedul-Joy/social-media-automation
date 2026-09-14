@@ -7,21 +7,17 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "discover": "tsx scripts/discover.ts",
-    "measure": "tsx scripts/measure-intent.ts",
-    "fb-groups": "tsx scripts/fb-groups.ts",
-    "queries": "tsx scripts/queries.ts"
+    "worker": "tsx worker/server.ts",
+    "fb-groups": "tsx scripts/fb-groups.ts"
   },
   "dependencies": {
-    "better-sqlite3": "^12.4.1",
+    "@supabase/supabase-js": "^2.58.0",
     "dotenv": "^17.2.0",
-    "googleapis": "^161.0.0",
     "next": "^15.5.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^7.6.11",
     "@types/node": "^24.0.0",
     "@types/react": "^19.1.0",
     "tsx": "^4.20.0",

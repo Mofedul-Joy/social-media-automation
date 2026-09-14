@@ -1,185 +1,148 @@
 # Social Media Engagement Automation
 
-Semi-automated engagement across **Reddit, Facebook Groups, and Threads** for
-discovery, and **Reddit, Facebook, and Instagram** for commenting. You define a
-business context; the system searches public posts **off-account through vendor
-APIs**, scores each one on two axes (topic relevance AND buyer intent), and shows
-the survivors in a dashboard for approval. Approved comments are posted from the
-client's own accounts through a logged-in browser. Every action is logged to
-Google Sheets.
+Type a topic, get drafted comments on live posts that are actually worth replying
+to. The system searches public posts **off-account through vendor APIs and public
+archives**, scores each one on two axes (topic relevance AND buyer intent), and
+shows only the survivors with a ready-to-paste comment. **There is no auto-poster** —
+a human copies the comment and posts it from their own logged-in browser.
 
 Client: **Hon Kwok** - built by Mofedul Joy.
 
-## Architecture
-
-Two lanes, deliberately separate. This split is the central design decision.
+## Architecture (3-way split)
 
 ```
-                      DISCOVERY LANE (read, off-account)
-business context -> intent query matrix -> EnsembleData  (Reddit, Threads)
-   (topics)           (lib/intent.ts)      SocialAPIs    (Facebook Groups)
-                                                   |
-                                    Claude: relevance + INTENT + draft
-                                                   |
-                                             SQLite queue
-                                                   |
-                                     Next.js dashboard (approval gate)
-                                                   |
-                      ENGAGEMENT LANE (write, on-account)
-                     logged-in Chrome + residential proxy -> comment
-                                                   |
-                                          Google Sheets log
+ browser ──Basic Auth──▶  Vercel  (Next.js: UI + /api/topic-reply + /api/config)
+                             │
+                             ├──▶ Supabase        business_context row (the AI brief)
+                             │
+                             ├──▶ Arctic Shift    Reddit archive        (free, public)
+                             ├──▶ HN Algolia      Hacker News           (free, public)
+                             ├──▶ StackExchange   Stack Overflow        (free, public)
+                             ├──▶ SocialAPIs      Facebook group posts  (credits)
+                             │
+                             └──▶ VPS worker      POST /analyze  (bearer token, TLS)
+                                      │
+                                      └──▶ `claude` CLI  (Hon's subscription)
+                                           relevance + intent + draft comment
 ```
 
-**Why the lanes are separate.** A previous build read posts from the client's own
-logged-in account and got the account banned. Discovery now runs entirely on
-third-party read APIs over public data, so a block costs a vendor credit instead
-of the asset the whole system depends on. Nothing in the discovery lane ever
-touches the client's session.
+**Why the VPS still exists.** `lib/ai.ts` shells out to the local `claude` CLI,
+authenticated by `CLAUDE_CODE_OAUTH_TOKEN`, so classification bills against Hon's
+flat Claude subscription instead of a metered API key. Serverless cannot run that
+binary. `worker/server.ts` is the entire remaining VPS surface: one authenticated
+`POST /analyze` plus an unauthenticated `GET /health`. Nothing else.
 
-**Why there is no Meta write API.** Graph API only writes to Pages and media you
-own, `/search?type=post` was removed in v2.0, and the Content Library is academic
-access only. Commenting on a stranger's post requires a logged-in browser. That is
-why the engagement lane exists and why it stays low volume and human paced.
+**Why nothing is persisted but the config.** Lookups are on-demand and ephemeral.
+The old batch-discovery job, candidates queue, approve/skip flow and Google Sheets
+log are gone — the on-demand lookup is what the client actually uses.
+
+**Why sources are off-account.** A previous build read posts from the client's own
+logged-in account and got the account banned. A block on these sources costs a
+vendor credit instead of the asset the whole system depends on.
 
 **Why queries are intent phrases, not topic nouns.** Searching "home gym" returns
 businesses selling home gyms, because that is who publishes about home gyms.
 Relevance is not intent. `lib/intent.ts` wraps each client topic in buyer phrasing
-("looking for someone to build {topic}") before it reaches an API, which flips the
-result set from sellers to people asking. The classifier then scores both axes
-separately and rejects anything it reads as a seller, however on-topic it is.
+("looking for someone to build {topic}"), which flips the result set from sellers
+to people asking. The classifier then scores both axes separately and rejects
+anything it reads as a seller, however on-topic it is.
 
-**Why Instagram is discovery-disabled.** Hashtag and account search return sellers
-by construction. It stays in the engagement lane only.
+### Sources
 
-### Discovery sources
+| Source | Vendor | Cost |
+|---|---|---|
+| Reddit | Arctic Shift (free public archive) | free, ~13s per subreddit, rate-limited by courtesy |
+| Hacker News | Algolia HN search | free |
+| Stack Overflow | Stack Exchange API | free |
+| Facebook groups | SocialAPIs `/facebook/groups/posts` | ~1 credit / 3 posts |
+| Facebook group discovery | SocialAPIs `/facebook/search/posts` | flaky, no timestamps — run once via `npm run fb-groups` |
 
-| Lane | Vendor | Endpoint | Measured yield |
-|---|---|---|---|
-| Reddit | EnsembleData | `/reddit/keyword/search` | 25 posts / 2 units, cheapest by ~12x |
-| Threads | EnsembleData | `/threads/keyword/search` | ~1 unit / post |
-| Facebook groups | SocialAPIs | `/facebook/groups/posts` | 3 posts / credit, real timestamps + top comments |
-| Facebook group discovery | SocialAPIs | `/facebook/search/posts` | ~1.4 posts / credit, flaky, no timestamps |
+`search/posts` is for finding **which groups** the buyers are in. Those group URLs
+are then polled directly. Search finds groups, groups find posts.
 
-`search/posts` is for finding **which groups** the buyers are in, run once via
-`npm run fb-groups`. Those group URLs are then polled directly. Search finds
-groups, groups find posts.
+## Layout
 
-- **Layer 1 – directive:** `./directives/build_social_engagement_system.md`
-- **Layer 2 – orchestration:** the dashboard (`app/`) + posting worker (`agents/worker.ts`)
-- **Layer 3 – execution:** deterministic modules in `lib/` + posting agents in `agents/`
+| Path | Runs on | What |
+|---|---|---|
+| `app/` | Vercel | UI + API routes |
+| `middleware.ts` | Vercel Edge | Basic Auth on every page and route |
+| `lib/config.ts`, `lib/supabaseClient.ts` | Vercel | business context in Supabase |
+| `lib/sources/*` | Vercel | the off-account search adapters |
+| `lib/analyzeClient.ts` | Vercel | HTTP client for the VPS worker |
+| `worker/server.ts`, `lib/ai.ts` | VPS | the `claude` CLI wrapper |
+| `deploy/` | VPS | Caddyfile + pm2 ecosystem file |
+| `scripts/fb-groups.ts` | local | one-off Facebook group discovery |
+
+## Supabase schema
+
+Run once in the project's SQL editor:
+
+```sql
+create table public.business_context (
+  id         int primary key default 1,
+  context    jsonb not null,
+  updated_at timestamptz not null default now(),
+  constraint business_context_single_row check (id = 1)
+);
+```
+
+RLS is off deliberately: nothing calls Supabase from the browser, only server-side
+route handlers using the service role key. `config/business_context.example.json`
+is the bundled fallback used until the first save.
 
 ## Setup
 
 ```bash
-cd Hon-SMA
 npm install
-npx playwright install chrome        # real Chrome, engagement lane only
-cp .env.template .env                 # ANTHROPIC_API_KEY, ENSEMBLEDATA_TOKEN,
-                                      # SOCIALAPIS_TOKEN, DASHBOARD_PASSWORD
-cp config/business_context.example.json config/business_context.json   # then edit
+cp .env.template .env          # then fill it in
+npm run dev
 ```
 
-Fill `config/business_context.json` with the client's product, audience, keywords,
-tone, and which platforms/subreddits/hashtags to monitor. This is the AI's core brief.
+Fill the business context through the dashboard (it writes the Supabase row), or
+`POST /api/config` with the client's product, audience, keywords, tone, and which
+platforms/subreddits/groups to monitor. This is the AI's core brief.
 
-### One-time account login (required before POSTING works)
+### VPS worker
+
 ```bash
-npm run login   # opens Chrome; sign in to Reddit/Facebook/Instagram once
+git pull && npm install
+cp worker/.env.example worker/.env     # CLAUDE_CODE_OAUTH_TOKEN + WORKER_SHARED_SECRET
+pm2 start deploy/ecosystem.worker.config.js && pm2 save
 ```
-Sessions persist in `CHROME_USER_DATA_DIR` and are used by the engagement lane only.
-Discovery never touches them. Create the accounts manually through the same proxy the
-VPS will operate from, so the signup IP matches the operating IP.
 
-## Daily workflow
-
-0. **Check the queries** - `npm run queries` prints the intent matrix a pass would
-   run. Costs nothing, calls no API. Do this after any change to `topics`.
-1. **Discover** - `npm run discover` (scheduled via cron on the VPS). Runs the intent
-   queries against the vendor APIs off-account, scores each post on relevance AND
-   intent, and queues only what clears both. Add a platform name to limit the pass:
-   `npm run discover -- reddit`.
-2. **Review** — open the dashboard (`npm run start`, behind auth), read each AI-drafted
-   comment, edit if needed, then **Approve** or **Skip**.
-3. **Post** - `npm run post` (also cron). Opens Chrome and posts only the approved
-   comments, respecting per-platform daily caps and human-like pacing.
+Put Caddy in front of it (`deploy/Caddyfile`) so the worker is reachable over TLS
+on a subdomain; `AI_WORKER_URL` on Vercel points at that subdomain.
 
 ### Occasional
-- `npm run fb-groups` - find which Facebook Groups the buyers are in, then paste the
-  URLs into `platforms.facebook.groups`. Run once per client, not per pass.
-- `npm run measure -- reddit 4` - run the intent lane against the noun baseline and
-  report buyer hit rate and units per buyer for each. Writes nothing to the queue.
-  This is the evidence run.
 
-## Deployment (single VPS)
-
-The dashboard, `discover`, and `post` worker share **one SQLite database**, so they
-run on the **same VPS**. This is the deployable target:
-
-1. Provision a VPS with a static residential proxy (`PROXY_URL`) and set `HEADLESS=true`.
-2. Set `DASHBOARD_PASSWORD` and a strong secret; set `DATABASE_PATH` to an absolute
-   path (so cron jobs and the server hit the same file).
-3. Run the dashboard as a service: `npm run build && npm run start` behind a reverse
-   proxy with TLS (nginx/Caddy). Auth is enforced by Basic Auth middleware.
-4. Schedule `npm run discover` and `npm run post` via cron (they read/write the same DB).
-
-**Why not Vercel (yet):** the sold proposal named Vercel, but a serverless host has an
-ephemeral filesystem and can't share the local SQLite file with the VPS worker. To host
-the dashboard on Vercel, swap the store to a networked DB the worker also connects to
-(libSQL/Turso or Postgres). That swap is isolated to `lib/store.ts` and is tracked as a
-Phase 3 option — the single-VPS setup above is the working default.
-
-## Known local gotcha: `#` in the folder path
-
-This repo currently lives under a parent folder named `Workspace - Antigravity #1`.
-The `#` breaks Next.js's RSC bundler and `next build` (module ids get truncated at
-the `#`). The **CLI tools work fine** (`discover`, `post`, `login` use tsx, not the
-Next bundler), but the **dashboard won't `dev`/`build` here**. Fix: copy/clone this
-folder to a path without `#` and run the dashboard there (the VPS deploy path is clean).
-
-Verified: on a clean path `next build` is green (all routes + home prerender) and the
-UI renders. This is purely a folder-name issue, not a code issue.
-
-## Status
-
-**Done**
-- Dashboard, SQLite queue, approval gate, Google Sheets log.
-- Discovery lane rebuilt off-account on vendor APIs: Reddit and Threads via
-  EnsembleData, Facebook Groups via SocialAPIs. No client account is ever read from.
-- Intent query generator (`lib/intent.ts`) and the two-axis classifier. Verified
-  end to end: an on-topic seller post scores 1.0 relevance and is rejected, while
-  a buyer post scores 0.95 intent and reaches the queue.
-- Per-run vendor unit accounting, so cost per client is measured, not estimated.
-
-**Next**
-- Run `npm run measure` with live tokens to produce the intent-vs-noun evidence.
-- Run `npm run fb-groups` to seed `platforms.facebook.groups`, then enable Facebook.
-
-**Blocked on others**
-- AdsPower Professional plan + Local API key, then swap `agents/browser.ts` from
-  `launchPersistentContext` to `connectOverCDP`.
-- Google service-account JSON for the Sheets log.
-- The proxy on file is a datacenter IP (AS10753 Lumen) and is refused at Facebook
-  signup. It needs replacing with a residential or mobile-ISP proxy before any
-  account is created.
+- `npm run fb-groups` — find which Facebook Groups the buyers are in, then paste the
+  URLs into the business context under `platforms.facebook.groups`. Run once per
+  client, not per lookup.
 
 ## Env vars
 
-See `.env.template`. Key ones:
+Two separate sets. See `.env.template` (Vercel) and `worker/.env.example` (VPS).
 
-| Var | Lane | What it is |
-|---|---|---|
-| `ANTHROPIC_API_KEY` | both | Claude, for the two-axis classifier and drafts |
-| `ENSEMBLEDATA_TOKEN` | discovery | Reddit + Threads search. HTTP 495 means the daily unit quota is spent, resets 00:00 UTC |
-| `SOCIALAPIS_TOKEN` | discovery | Facebook group posts + post search |
-| `MAX_POST_AGE_DAYS` | discovery | Drop posts older than this (default 14) |
-| `MAX_ANALYZE_PER_RUN` | discovery | Ceiling on classifier calls per pass (default 120) |
-| `DASHBOARD_USER` / `DASHBOARD_PASSWORD` | dashboard | Basic Auth on every page and route |
-| `DATABASE_PATH` | all | Absolute path; the dashboard, discover and post worker must share one file |
-| `ACTIVITY_LOG_SHEET_ID`, `GOOGLE_SERVICE_ACCOUNT_JSON` | log | Google Sheets activity log |
-| `CHROME_USER_DATA_DIR` | engagement | Persistent logged-in Chrome profile |
-| `PROXY_URL`, `PROXY_USERNAME`, `PROXY_PASSWORD` | engagement | Residential or mobile-ISP proxy. A datacenter IP is refused at Facebook signup |
-| `MAX_*_POSTS_PER_DAY`, `ACTION_DELAY_*` | engagement | Volume caps and human pacing |
+**Vercel**
+
+| Var | What it is |
+|---|---|
+| `DASHBOARD_USER` / `DASHBOARD_PASSWORD` | Basic Auth on every page and route |
+| `SUPABASE_URL` | `https://<project-ref>.supabase.co` |
+| `SUPABASE_SERVICE_ROLE_KEY` | service role key — server-side only, never shipped to the browser |
+| `AI_WORKER_URL` | e.g. `https://worker.<hon-domain>`, no trailing slash |
+| `AI_WORKER_SECRET` | bearer token; must equal the VPS's `WORKER_SHARED_SECRET` |
+| `SOCIALAPIS_TOKEN` | Facebook group posts + post search |
+| `MAX_POST_AGE_DAYS` | drop posts older than this (default 14) |
+
+**VPS worker**
+
+| Var | What it is |
+|---|---|
+| `CLAUDE_CODE_OAUTH_TOKEN` | long-lived token from `claude setup-token`; bills the client's subscription |
+| `CLAUDE_MODEL` | default `claude-sonnet-5` |
+| `WORKER_SHARED_SECRET` | must equal Vercel's `AI_WORKER_SECRET` |
+| `WORKER_PORT` | optional, default 8787 |
 
 No published number exists for a safe comments-per-day rate on any of these
-platforms. The caps are deliberately conservative; keep the volume low.
+platforms. Keep the volume low and human-paced.

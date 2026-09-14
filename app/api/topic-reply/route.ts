@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { loadBusinessContext } from "@/lib/config";
-import { analyzePost } from "@/lib/ai";
+import { analyzePost } from "@/lib/analyzeClient";
 import { searchReddit } from "@/lib/sources/arcticshift";
 import { searchHackerNews } from "@/lib/sources/hackernews";
 import { searchStackOverflow } from "@/lib/sources/stackexchange";
@@ -12,9 +12,9 @@ export const dynamic = "force-dynamic";
 
 /**
  * Live one-off lookup: a typed topic in, a handful of drafted comments back,
- * inside a 60s budget. Deliberately NOT the discovery lane — nothing is written
- * to the candidates table. The analyze calls run in parallel, so total latency
- * is roughly one call (~14s), not MAX_RESULTS of them.
+ * inside a 60s budget. Results are ephemeral — nothing is persisted. The analyze
+ * calls run in parallel (each one a round trip to the VPS worker), so total
+ * latency is roughly one call (~14s), not MAX_RESULTS of them.
  */
 
 const MAX_POST_AGE_DAYS = Number(process.env.MAX_POST_AGE_DAYS ?? 14);
@@ -96,7 +96,7 @@ export async function POST(req: Request) {
     );
   }
   const q = topic.trim();
-  const ctx = loadBusinessContext();
+  const ctx = await loadBusinessContext();
 
   // Only sources with real free-text keyword search reach the AI without a
   // local topic filter. Arctic Shift's `query` needs a subreddit to scope to;
@@ -152,8 +152,8 @@ export async function POST(req: Request) {
     }),
   );
 
-  // Same bar the batch job applies before queueing (lib/discover.ts), so sellers
-  // and other high-relevance/low-intent noise never show as "worth replying to."
+  // Intent floor, so sellers and other high-relevance/low-intent noise never
+  // show as "worth replying to."
   const intentFloor = ctx.intent_threshold ?? 0.6;
   const results = settled
     .filter((r): r is { post: ScrapedPost; analysis: Awaited<ReturnType<typeof analyzePost>> } =>

@@ -24,7 +24,7 @@ const BASE = "https://api.socialapis.io";
 
 async function main() {
   const limit = Number(process.argv[2] ?? 6);
-  const ctx = loadBusinessContext();
+  const ctx = await loadBusinessContext();
   const token = process.env.SOCIALAPIS_TOKEN;
   if (!token) throw new Error("SOCIALAPIS_TOKEN is not set");
 

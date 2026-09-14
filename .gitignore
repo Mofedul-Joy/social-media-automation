@@ -8,12 +8,12 @@ next-env.d.ts
 .env
 .env.*
 !.env.template
-config/google-service-account.json
+!worker/.env.example
 
 # client-specific config (public repo) — keep the example, not the real brief
 config/business_context.json
 
-# runtime data: logged-in chrome session cookies + SQLite queue — never commit
+# runtime data / local scratch — never commit
 data/
 
 # local agent scratch / misc

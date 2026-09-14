@@ -1,5 +1,31 @@
 # Architecture - Social Engagement Automation (Hon Kwok)
 
+> **Version 4, 2026-09-14 supersedes section 2c below and most of v3.** The system
+> is split three ways: **Vercel** (Next.js UI + API routes), **Supabase** (the one
+> piece of state that survives, the `business_context` row), and the **VPS** kept
+> alive for exactly one reason — `analyzePost()` shells out to the `claude` CLI on
+> Hon's subscription, which serverless cannot run. That call now sits behind one
+> authenticated endpoint (`worker/server.ts`, `POST /analyze`, bearer token over
+> TLS via Caddy). The current design is documented in README.md.
+>
+> What changed and why:
+> - The hourly batch-discovery job is **dropped entirely**, not moved. It only fed
+>   a candidates queue nobody used once the on-demand topic-reply lookup (the thing
+>   that actually solved the 60-second latency complaint) worked. With it go the
+>   SQLite store, the candidates table, the approve/skip/posted decision flow, the
+>   Google Sheets activity log, and the cron entries. Deleted: `lib/store.ts`,
+>   `lib/discover.ts`, `lib/sheets.ts`, `scripts/discover.ts`, `app/api/posts`,
+>   `app/api/decision`.
+> - Section 2c's "not Vercel (serverless can't run a persistent browser or share
+>   the DB)" no longer holds: there is no persistent browser (no auto-poster was
+>   ever built — a human pastes the comment) and no shared DB (config lives in
+>   Supabase, lookups are ephemeral).
+> - The engagement lane described below was never built and is not planned. There
+>   is no Playwright, no proxy, no AdsPower, no posting agent.
+> - Removed env vars: `DATABASE_PATH`, `GOOGLE_SERVICE_ACCOUNT_JSON`,
+>   `ACTIVITY_LOG_SHEET_ID`, `MAX_ANALYZE_PER_RUN`. `CLAUDE_CODE_OAUTH_TOKEN` and
+>   `CLAUDE_MODEL` moved off the app entirely and now live only on the VPS worker.
+>
 > **Version 3, 2026-08-31 supersedes section 2a below.** Discovery no longer runs
 > through the client's logged-in browser. It runs off-account on third-party read
 > APIs, and queries are generated intent phrases rather than topic nouns. The

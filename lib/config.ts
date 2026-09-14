@@ -1,26 +1,38 @@
-import fs from "node:fs";
-import path from "node:path";
+import { getSupabase } from "./supabaseClient";
+import exampleContext from "../config/business_context.example.json";
 import type { BusinessContext } from "./types";
 
-const CONFIG_PATH = path.join(process.cwd(), "config", "business_context.json");
-
 /**
- * Loads the client's business context. This is the AI's core instruction set:
- * what the business is, who to engage, and how comments should sound.
- * Falls back to the example file so the app runs before the client brief lands.
+ * The client's business context. This is the AI's core instruction set: what the
+ * business is, who to engage, and how comments should sound. Stored as a single
+ * row in Supabase (Vercel's filesystem is read-only, so it cannot live on disk).
+ * The bundled example file is the fallback until the client brief lands.
  */
-export function loadBusinessContext(): BusinessContext {
-  const p = fs.existsSync(CONFIG_PATH)
-    ? CONFIG_PATH
-    : path.join(process.cwd(), "config", "business_context.example.json");
-  const raw = fs.readFileSync(p, "utf-8");
-  return JSON.parse(raw) as BusinessContext;
+const ROW_ID = 1;
+
+export async function loadBusinessContext(): Promise<BusinessContext> {
+  const { data, error } = await getSupabase()
+    .from("business_context")
+    .select("context")
+    .eq("id", ROW_ID)
+    .maybeSingle();
+  if (error) throw error;
+  return (data?.context as BusinessContext) ?? (exampleContext as unknown as BusinessContext);
 }
 
-export function saveBusinessContext(ctx: BusinessContext): void {
-  fs.writeFileSync(CONFIG_PATH, JSON.stringify(ctx, null, 2), "utf-8");
+export async function saveBusinessContext(ctx: BusinessContext): Promise<void> {
+  const { error } = await getSupabase()
+    .from("business_context")
+    .upsert({ id: ROW_ID, context: ctx, updated_at: new Date().toISOString() });
+  if (error) throw error;
 }
 
-export function isConfigured(): boolean {
-  return fs.existsSync(CONFIG_PATH);
+export async function isConfigured(): Promise<boolean> {
+  const { data, error } = await getSupabase()
+    .from("business_context")
+    .select("id")
+    .eq("id", ROW_ID)
+    .maybeSingle();
+  if (error) throw error;
+  return !!data;
 }
