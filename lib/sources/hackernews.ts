@@ -1,5 +1,5 @@
 import type { ScrapedPost, SourceResult } from "../types";
-import { getJson, externalIdFromUrl } from "./http";
+import { getJson, externalIdFromUrl, stripHtml } from "./http";
 
 /**
  * Hacker News, via Algolia's public search API. No key, no vendor cost, no
@@ -24,23 +24,22 @@ interface HnHit {
 
 function hnPost(h: HnHit, query: string): ScrapedPost | null {
   const isComment = h._tags.includes("comment");
-  const body = (isComment ? h.comment_text : h.story_text ?? h.title) ?? "";
-  if (!body.trim()) return null;
-  const fallbackUrl = `https://news.ycombinator.com/item?id=${h.objectID}`;
-  // h.url is whatever the submitter entered (Algolia doesn't validate it) — never
-  // trust it as a link target without a scheme check.
-  const url = isComment
-    ? fallbackUrl
-    : h.url && /^https?:\/\//i.test(h.url)
-      ? h.url
-      : fallbackUrl;
+  // Algolia returns story_text and comment_text as HTML, not plain text.
+  const body = stripHtml((isComment ? h.comment_text : h.story_text ?? h.title) ?? "");
+  if (!body) return null;
+  // Always the HN thread, never `h.url`. For a link submission h.url is the
+  // article the submitter posted, and there is nothing to comment on over
+  // there. "Open post" has to land where the conversation is, on the item page
+  // the reader is already logged into. (h.url is also submitter-entered and
+  // unvalidated by Algolia, so it was never safe as a link target anyway.)
+  const url = `https://news.ycombinator.com/item?id=${h.objectID}`;
   return {
     platform: "hackernews",
-    external_id: externalIdFromUrl(`https://news.ycombinator.com/item?id=${h.objectID}`),
+    external_id: externalIdFromUrl(url),
     url,
     author: h.author,
     title: isComment ? undefined : h.title ?? undefined,
-    body: body.trim(),
+    body,
     scraped_at: new Date().toISOString(),
     posted_at: h.created_at,
     source_query: query,

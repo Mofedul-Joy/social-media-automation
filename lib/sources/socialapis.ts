@@ -74,6 +74,12 @@ function toPost(p: any, query: string, groupUrl?: string): ScrapedPost | null {
 /**
  * Poll one group's recent posts. `limit` is capped at 9 by the vendor and
  * billed as ceil(posts/3) credits, so 9 is the efficient page size.
+ *
+ * Retries are off here on purpose. getJson's default is two retries on
+ * 429/5xx, and every attempt is a billable SocialAPIs call, so a single
+ * search could quietly turn into three charges. One call, one charge: if the
+ * vendor is throttling or down, the caller treats Facebook as absent for that
+ * search rather than paying to insist.
  */
 export async function groupPosts(
   groupUrl: string,
@@ -81,7 +87,11 @@ export async function groupPosts(
 ): Promise<SourceResult> {
   const params = new URLSearchParams({ link: groupUrl, limit: String(Math.min(9, Math.max(3, limit))) });
   if (afterTime) params.set("after_time", afterTime.toISOString());
-  const json = await getJson(`${BASE}/facebook/groups/posts?${params}`, { headers: headers() });
+  const json = await getJson(
+    `${BASE}/facebook/groups/posts?${params}`,
+    { headers: headers() },
+    { retries: 0 },
+  );
   const posts = items(json)
     .map((p) => toPost(p, `group:${groupUrl}`, groupUrl))
     .filter((p): p is ScrapedPost => p !== null);

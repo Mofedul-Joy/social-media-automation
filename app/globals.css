@@ -119,3 +119,62 @@ header.top .sub { color: var(--muted); font-size: 13px; margin-top: 2px; }
   border-radius: 8px; font-size: 13px;
 }
 .statbar { color: var(--muted); font-size: 12px; }
+
+/* --- two-step lookup: raw post, then a drafted comment on request ---------- */
+
+/* A listed post shows its own text until a comment exists, clamped so a long
+   Reddit body cannot push the Generate button off the screen. */
+.card .excerpt {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  white-space: pre-wrap;
+}
+/* The drafted comment is the thing the human acts on, so it reads at full
+   strength while the post's own text stays muted behind it. */
+.card .drafted { color: var(--text); }
+
+/* Mid-request the button keeps a readable label. The plain :disabled fade
+   would drop dark-on-accent text well under AA, which is the one state a
+   user is actually staring at. */
+.btn.working,
+.btn.working:disabled {
+  opacity: 1;
+  background: var(--panel-2);
+  border-color: #3a424e;
+  color: var(--text);
+  cursor: progress;
+}
+
+.spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  margin-right: 8px;
+  vertical-align: -2px;
+  border: 2px solid var(--border);
+  border-top-color: var(--text);
+  border-radius: 50%;
+  animation: spin .7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Placeholder shaped like the comment that is about to land, so the card does
+   not jump when it arrives. */
+.skeleton-block { display: flex; flex-direction: column; gap: 8px; margin: 0 0 12px; }
+.skeleton {
+  height: 12px;
+  border-radius: 6px;
+  background: linear-gradient(90deg, var(--panel-2), #262b33, var(--panel-2));
+  background-size: 200% 100%;
+  animation: shimmer 1.4s linear infinite;
+}
+@keyframes shimmer { to { background-position: -200% 0; } }
+
+@media (prefers-reduced-motion: reduce) {
+  /* Still moves, because a stalled spinner reads as a hung request, just slow
+     enough not to be the thing you notice. */
+  .spinner { animation-duration: 2.4s; }
+  .skeleton { animation: none; background: var(--panel-2); }
+}
