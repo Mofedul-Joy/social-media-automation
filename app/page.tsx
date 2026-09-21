@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Search, Loader2, ArrowLeft, Radio, Sparkles, Info, Check, RotateCcw, UserRound } from "lucide-react";
+import { Search, Loader2, ArrowLeft, Radio, Sparkles, Info, Check, RotateCcw, UserRound, PenLine } from "lucide-react";
 import type { BusinessContext, Platform, ScrapedPost } from "@/lib/types";
 // Type-only, and `import type` is erased before bundling — lib/topics.ts holds
 // the service-role Supabase client and must never reach the browser.
@@ -266,6 +266,13 @@ export default function Home() {
             <div className="text-[11px] text-[color:var(--faint)] -mt-0.5">Engagement Studio</div>
           </div>
         </div>
+        <a
+          href="/compose"
+          className="inline-flex items-center gap-2 text-sm font-medium text-[color:var(--muted)] hover:text-[color:var(--text)] glass rounded-full px-4 py-2 transition-colors"
+        >
+          <PenLine className="w-4 h-4" strokeWidth={2.2} />
+          Compose
+        </a>
       </header>
 
       <AnimatePresence mode="wait">
