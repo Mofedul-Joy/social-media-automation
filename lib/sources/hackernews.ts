@@ -1,5 +1,6 @@
 import type { ScrapedPost, SourceResult } from "../types";
 import { getJson, replyPost, REPLY_FETCH_LIMITS, stripHtml } from "./http";
+import { decodeEntities } from "../text";
 
 /**
  * Hacker News, via Algolia's public search API. No key, no vendor cost, no
@@ -25,7 +26,7 @@ interface HnHit {
 function hnPost(h: HnHit, query: string): ScrapedPost | null {
   const isComment = h._tags.includes("comment");
   // Algolia returns story_text and comment_text as HTML, not plain text.
-  const body = stripHtml((isComment ? h.comment_text : h.story_text ?? h.title) ?? "");
+  const body = decodeEntities(stripHtml((isComment ? h.comment_text : h.story_text ?? h.title) ?? ""));
   if (!body) return null;
   // Always the HN thread, never `h.url`. For a link submission h.url is the
   // article the submitter posted, and there is nothing to comment on over
@@ -42,7 +43,7 @@ function hnPost(h: HnHit, query: string): ScrapedPost | null {
     external_id: `news.ycombinator.com/item?id=${h.objectID}`,
     url,
     author: h.author,
-    title: isComment ? undefined : h.title ?? undefined,
+    title: isComment ? undefined : h.title ? decodeEntities(h.title) : undefined,
     body,
     scraped_at: new Date().toISOString(),
     posted_at: h.created_at,
@@ -106,7 +107,7 @@ export async function fetchReplies(post: ScrapedPost): Promise<ScrapedPost[]> {
         id: String(c.id),
         url: `https://news.ycombinator.com/item?id=${c.id}`,
         // Algolia hands back HTML here, same as the search index does.
-        body: stripHtml(c.text ?? ""),
+        body: decodeEntities(stripHtml(c.text ?? "")),
         author: c.author ?? undefined,
         posted_at: c.created_at ?? undefined,
       }),
