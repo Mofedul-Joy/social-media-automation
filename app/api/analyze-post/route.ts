@@ -83,6 +83,11 @@ function sanitize(raw: any): { post: ScrapedPost } | { error: string } {
         : new Date().toISOString(),
       posted_at: str(raw.posted_at, 40),
       source_query: str(raw.source_query, 500),
+      // The deterministic label discovery stamped on. Kept so the response can
+      // hand back the same post with the AI's category swapped in.
+      category: str(raw.category, 100),
+      is_reply: raw.is_reply === true,
+      parent_url: str(raw.parent_url, 2000),
     },
   };
 }
@@ -110,7 +115,12 @@ export async function POST(req: Request) {
     // before the user ever saw them; the new UI shows both scores and lets the
     // human make that call, so the analysis goes back exactly as returned.
     const analysis = await analyzePost(ctx, checked.post);
-    return NextResponse.json({ analysis });
+    // The AI's category is a refinement of the deterministic one discovery
+    // stamped on, so it overwrites it for this post. The updated post goes back
+    // alongside the analysis so the caller can replace its copy wholesale
+    // instead of reaching into the analysis to patch one field.
+    const post = { ...checked.post, category: analysis.category || checked.post.category };
+    return NextResponse.json({ analysis, post });
   } catch (err) {
     // The worker's own error text can carry its URL or response body, so it is
     // logged server side and the client gets a fixed, short message.

@@ -1,5 +1,7 @@
 /** Shared HTTP helpers for the discovery lane. */
 
+import type { ScrapedPost } from "../types";
+
 export class SourceError extends Error {
   constructor(message: string, readonly status?: number) {
     super(message);
@@ -48,6 +50,15 @@ export async function getJson(
   throw lastErr ?? new SourceError("request failed");
 }
 
+/**
+ * Per-call limits for the reply pass. getJson's defaults (45s, 2 retries) are
+ * sized for the primary search, where a slow answer is still worth waiting
+ * for. A reply fetch runs inside a 12s lane cap in discoverPosts, so those
+ * defaults would leave a request running for up to two minutes after the route
+ * had already answered without it. One retry, eight seconds.
+ */
+export const REPLY_FETCH_LIMITS = { retries: 1, timeoutMs: 8000 };
+
 export function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -91,4 +102,34 @@ export function isFresh(iso: string | undefined, maxAgeDays: number): boolean {
   const t = Date.parse(iso);
   if (Number.isNaN(t)) return true;
   return Date.now() - t <= maxAgeDays * 86400_000;
+}
+
+/**
+ * Normalize one comment/answer into a ScrapedPost so the discovery pipeline's
+ * existing dedupe, filter and sort steps work on it unchanged.
+ *
+ * `external_id` is the parent's id plus the comment's own, which keeps a reply
+ * distinct from its thread and from the same reply seen twice. `posted_at` is
+ * whatever the source gives for the COMMENT — never the parent's date, which
+ * would misreport freshness; a source with no comment timestamp (Facebook)
+ * leaves it undefined and falls into the caller's undated reserved slice.
+ */
+export function replyPost(
+  parent: ScrapedPost,
+  reply: { id: string; url: string; body: string; author?: string; posted_at?: string },
+): ScrapedPost | null {
+  const body = reply.body.trim();
+  if (!body) return null;
+  return {
+    platform: parent.platform,
+    external_id: `${parent.external_id}#${reply.id}`,
+    url: reply.url,
+    author: reply.author,
+    body,
+    scraped_at: new Date().toISOString(),
+    posted_at: reply.posted_at,
+    source_query: parent.source_query,
+    is_reply: true,
+    parent_url: parent.url,
+  };
 }

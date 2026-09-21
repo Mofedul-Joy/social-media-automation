@@ -1,5 +1,5 @@
 import type { ScrapedPost, SourceResult } from "../types";
-import { getJson, externalIdFromUrl, stripHtml } from "./http";
+import { getJson, replyPost, REPLY_FETCH_LIMITS, stripHtml } from "./http";
 
 /**
  * Hacker News, via Algolia's public search API. No key, no vendor cost, no
@@ -35,7 +35,11 @@ function hnPost(h: HnHit, query: string): ScrapedPost | null {
   const url = `https://news.ycombinator.com/item?id=${h.objectID}`;
   return {
     platform: "hackernews",
-    external_id: externalIdFromUrl(url),
+    // NOT externalIdFromUrl: it drops the query string, and the item id is the
+    // whole query string here, so every HN hit collapsed to
+    // "news.ycombinator.com/item" and the caller's dedupe threw all but one
+    // away. Same trap socialapis.ts documents for permalink.php URLs.
+    external_id: `news.ycombinator.com/item?id=${h.objectID}`,
     url,
     author: h.author,
     title: isComment ? undefined : h.title ?? undefined,
@@ -63,4 +67,49 @@ export async function searchHackerNews(query: string): Promise<SourceResult> {
     .map((h) => hnPost(h, query))
     .filter((p): p is ScrapedPost => p !== null);
   return { posts, unitsCharged: 0, errors: [] };
+}
+
+/**
+ * The whole comment tree for one story in a single free call. Algolia's
+ * `/items/{id}` returns every descendant already nested under `children`, so
+ * there is no pagination and no per-comment fan-out — the cheapest of the four
+ * sources to extend, which is why it is not capped as hard as the others.
+ */
+interface HnItem {
+  id: number;
+  type?: string;
+  text?: string | null;
+  author?: string | null;
+  created_at?: string | null;
+  children?: HnItem[];
+}
+
+function flattenItems(node: HnItem, out: HnItem[] = []): HnItem[] {
+  for (const child of node.children ?? []) {
+    if (child.type === "comment") out.push(child);
+    flattenItems(child, out);
+  }
+  return out;
+}
+
+/** `https://news.ycombinator.com/item?id=<id>` -> `<id>`. */
+const ITEM_ID = /[?&]id=(\d+)/;
+
+export async function fetchReplies(post: ScrapedPost): Promise<ScrapedPost[]> {
+  const id = ITEM_ID.exec(post.url)?.[1];
+  if (!id) return [];
+  const json: HnItem | null = await getJson(`${BASE}/items/${id}`, {}, REPLY_FETCH_LIMITS);
+  if (!json) return [];
+  return flattenItems(json)
+    .map((c) =>
+      replyPost(post, {
+        id: String(c.id),
+        url: `https://news.ycombinator.com/item?id=${c.id}`,
+        // Algolia hands back HTML here, same as the search index does.
+        body: stripHtml(c.text ?? ""),
+        author: c.author ?? undefined,
+        posted_at: c.created_at ?? undefined,
+      }),
+    )
+    .filter((p): p is ScrapedPost => p !== null);
 }

@@ -1,5 +1,12 @@
 import type { ScrapedPost, SourceResult } from "../types";
-import { getJson, externalIdFromUrl, sleep, SourceError } from "./http";
+import {
+  getJson,
+  externalIdFromUrl,
+  replyPost,
+  sleep,
+  REPLY_FETCH_LIMITS,
+  SourceError,
+} from "./http";
 
 /**
  * Arctic Shift: free, unauthenticated Reddit archive.
@@ -96,4 +103,58 @@ export async function searchReddit(
     await sleep(1500);
   }
   return { posts, unitsCharged: 0, errors };
+}
+
+/**
+ * Every comment on one post, via the archive's sibling tree endpoint. Free and
+ * unauthenticated like the search above, so there is no vendor cost — the real
+ * price is a round trip plus the same 1.5s courtesy gap the caller applies
+ * between posts, which is why this only ever runs on a filtered shortlist.
+ *
+ * The endpoint returns a flat `data` array of `t1` nodes in practice (verified
+ * live); the nested `replies.data.children` shape Reddit itself uses is walked
+ * too, since it costs nothing to support and the archive mirrors Reddit's
+ * schema. `more` stubs are skipped: they carry ids, not text.
+ */
+interface ArcticComment {
+  id: string;
+  body?: string;
+  author?: string;
+  created_utc?: number;
+  permalink?: string;
+  replies?: { data?: { children?: unknown[] } } | string;
+}
+
+function flattenComments(rows: any[], out: ArcticComment[] = []): ArcticComment[] {
+  for (const row of rows ?? []) {
+    if (row?.kind !== "t1" || !row.data) continue;
+    out.push(row.data as ArcticComment);
+    const kids = row.data.replies?.data?.children;
+    if (Array.isArray(kids)) flattenComments(kids, out);
+  }
+  return out;
+}
+
+/** `https://www.reddit.com/r/<sub>/comments/<id>/<slug>` -> `<id>`. */
+const POST_ID = /\/comments\/([a-z0-9]+)/i;
+
+export async function fetchReplies(post: ScrapedPost, limit = 100): Promise<ScrapedPost[]> {
+  const id = POST_ID.exec(post.url)?.[1];
+  if (!id) return [];
+  const json = await getJson(
+    `${BASE}/comments/tree?link_id=t3_${id}&limit=${limit}`,
+    { headers: HEADERS },
+    REPLY_FETCH_LIMITS,
+  );
+  return flattenComments(json?.data ?? [])
+    .map((c) =>
+      replyPost(post, {
+        id: c.id,
+        url: c.permalink ? `https://www.reddit.com${c.permalink}` : `${post.url}${c.id}/`,
+        body: c.body ?? "",
+        author: c.author,
+        posted_at: c.created_utc ? new Date(c.created_utc * 1000).toISOString() : undefined,
+      }),
+    )
+    .filter((p): p is ScrapedPost => p !== null);
 }

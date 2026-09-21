@@ -1,11 +1,12 @@
-import { searchReddit } from "@/lib/sources/arcticshift";
-import { searchHackerNews } from "@/lib/sources/hackernews";
-import { searchStackOverflow } from "@/lib/sources/stackexchange";
-import { groupPosts, searchPosts } from "@/lib/sources/socialapis";
-import { isFresh } from "@/lib/sources/http";
+import { searchReddit, fetchReplies as redditReplies } from "@/lib/sources/arcticshift";
+import { searchHackerNews, fetchReplies as hnReplies } from "@/lib/sources/hackernews";
+import { searchStackOverflow, fetchReplies as seReplies } from "@/lib/sources/stackexchange";
+import { groupPosts, searchPosts, fetchReplies as fbReplies } from "@/lib/sources/socialapis";
+import { isFresh, sleep } from "@/lib/sources/http";
 import { intentQueriesFor, primaryIntentQuery } from "@/lib/intent";
-import { isPromotionalPost, hasBuyerSignal } from "@/lib/sellerFilter";
-import type { BusinessContext, ScrapedPost, SourceResult } from "@/lib/types";
+import { isPromotionalPost, hasBuyerSignal, categorize } from "@/lib/sellerFilter";
+import { CATEGORY_BUYER } from "@/lib/types";
+import type { BusinessContext, Platform, ScrapedPost, SourceResult } from "@/lib/types";
 
 /**
  * The fetch half of a live lookup, shared by the legacy analyze-everything
@@ -55,6 +56,34 @@ const REDDIT_BUDGET_MS = 40_000;
  */
 const MAX_LIVE_GROUPS = 1;
 const FACEBOOK_BUDGET_MS = 20_000;
+
+/**
+ * Deep-reply surfacing (second pass). Hon's case is a thread whose 11th reply,
+ * not the parent post, is the one worth answering — so each shortlisted post's
+ * comments are fetched and filtered individually.
+ *
+ * This runs ONLY on the shortlist that already survived
+ * isFresh -> isPromotionalPost -> hasBuyerSignal. The raw pool is 41-103
+ * candidates per topic (see the diagnostic above); one extra round trip for
+ * each of those would blow every budget on every source, and on Facebook would
+ * bill a credit for each. Per-platform caps below bound it further, hardest on
+ * the only source that charges.
+ */
+const REPLY_BUDGET_MS = 12_000;
+const REDDIT_COURTESY_MS = 1500;
+const MAX_REPLY_POSTS: Record<Platform, number> = {
+  hackernews: 5, // one free call, whole tree
+  stackexchange: 5, // one free call, but shared 300/day anonymous quota
+  reddit: 3, // free, but 1.5s courtesy gap each
+  // 1 SocialAPIs credit each — the only source that charges. The deadline
+  // below is only checked BEFORE a call, and an abandoned in-flight call still
+  // bills, so socialapis.ts's own comment timeout is set so that this many
+  // back-to-back calls still fit inside REPLY_BUDGET_MS. Raising this number
+  // means lowering that timeout to match.
+  facebook: 2,
+  instagram: 0, // discovery-excluded
+  threads: 0, // no working discovery source
+};
 
 /** One source, never fatal: a dead source must not take the other two down. */
 async function safeSearch(
@@ -121,6 +150,89 @@ async function fetchFacebookSearch(queries: string[]): Promise<ScrapedPost[]> {
     }),
   );
   return results.flat();
+}
+
+/**
+ * Comments/answers on the shortlisted posts, normalized to ScrapedPost and run
+ * back through the same deterministic gates the parent posts passed. A parent
+ * passing says nothing about its replies: the signal Hon is after may live only
+ * in one comment, so every gate is re-applied per reply rather than inherited.
+ *
+ * No AI here either. Same regex filters, nothing else.
+ */
+async function surfaceReplies(shortlist: ScrapedPost[], topic: string): Promise<ScrapedPost[]> {
+  const deadline = Date.now() + REPLY_BUDGET_MS;
+  const byPlatform = new Map<Platform, ScrapedPost[]>();
+  for (const p of shortlist) {
+    const bucket = byPlatform.get(p.platform) ?? [];
+    if (bucket.length < MAX_REPLY_POSTS[p.platform]) bucket.push(p);
+    byPlatform.set(p.platform, bucket);
+  }
+
+  /** One post's replies, never fatal: a dead thread must not kill the pass. */
+  const safe = async (p: ScrapedPost, run: () => Promise<ScrapedPost[]>) => {
+    try {
+      return await run();
+    } catch (err) {
+      console.error(`replies ${p.platform} ${p.url}: ${(err as Error).message}`);
+      return [];
+    }
+  };
+
+  const lanes: Promise<ScrapedPost[]>[] = [];
+  // Free, one call each, no rate courtesy owed — run them all at once.
+  for (const p of byPlatform.get("hackernews") ?? []) lanes.push(safe(p, () => hnReplies(p)));
+  for (const p of byPlatform.get("stackexchange") ?? []) lanes.push(safe(p, () => seReplies(p)));
+  // Reddit: serial, keeping the same 1.5s courtesy gap the search path uses.
+  // This is a free volunteer-run archive; burst load is not ours to add.
+  lanes.push(
+    (async () => {
+      const out: ScrapedPost[] = [];
+      for (const p of byPlatform.get("reddit") ?? []) {
+        if (Date.now() > deadline) break;
+        out.push(...(await safe(p, () => redditReplies(p))));
+        await sleep(REDDIT_COURTESY_MS);
+      }
+      return out;
+    })(),
+  );
+  // Facebook last and capped hardest: serial, so a run that overruns the
+  // deadline stops buying credits instead of firing the rest in parallel.
+  lanes.push(
+    (async () => {
+      const out: ScrapedPost[] = [];
+      for (const p of byPlatform.get("facebook") ?? []) {
+        if (Date.now() > deadline) break;
+        out.push(
+          ...(await safe(p, async () => {
+            const res = await fbReplies(p);
+            console.log(`replies facebook ${p.url}: ${res.unitsCharged} SocialAPIs credit(s)`);
+            return res.posts;
+          })),
+        );
+      }
+      return out;
+    })(),
+  );
+
+  // Cap each lane rather than the whole pass, so one hung source costs its own
+  // replies and not everyone else's. Losing replies is survivable; the parent
+  // posts are already in hand either way.
+  const replies = (
+    await Promise.all(
+      lanes.map((l) => Promise.race([l, sleep(REPLY_BUDGET_MS).then(() => [] as ScrapedPost[])])),
+    )
+  ).flat();
+
+  const kept = replies.filter(
+    (r) =>
+      isFresh(r.posted_at, MAX_POST_AGE_DAYS) &&
+      matchesTopic(r, topic) &&
+      !isPromotionalPost(r) &&
+      hasBuyerSignal(r),
+  );
+  console.log(`discover replies "${topic}": fetched=${replies.length} kept=${kept.length}`);
+  return kept;
 }
 
 /**
@@ -204,27 +316,48 @@ export async function discoverPosts(
   for (const p of raw) byPlatform[p.platform] = (byPlatform[p.platform] ?? 0) + 1;
   const isFreshOnly = raw.filter((p) => isFresh(p.posted_at, MAX_POST_AGE_DAYS));
   const notPromo = isFreshOnly.filter((p) => !isPromotionalPost(p));
-  const fresh = notPromo.filter((p) => hasBuyerSignal(p));
-  console.log(
-    `discover "${q}": raw=${raw.length} (${JSON.stringify(byPlatform)}) fresh=${isFreshOnly.length} notPromo=${notPromo.length} buyerSignal=${fresh.length}`,
-  );
 
   // Dedupe on external_id. Two sources can surface the same thread (an HN story
-  // whose URL is a Reddit post, a group post reposted), and the caller now
-  // renders one card per post, so a duplicate is visible to the user.
+  // whose URL is a Reddit post, a group post reposted), and the caller renders
+  // one card per post, so a duplicate is visible to the user. Deduping BEFORE
+  // the reply pass also stops the same thread's comments being fetched twice.
+  //
+  // Results are everything non-promotional, not just the buyer-signal subset
+  // the old version returned. Hon asked for two buckets on the page — people
+  // asking for something, and people merely talking about the topic — so the
+  // no-buyer-signal half has to reach the page to be labelled at all. The
+  // buyer-signal subset is still what the reply pass and the sort prioritise,
+  // so nothing that used to surface stops surfacing.
   const byId = new Map<string, ScrapedPost>();
-  for (const p of fresh) if (!byId.has(p.external_id)) byId.set(p.external_id, p);
+  for (const p of notPromo) {
+    if (!byId.has(p.external_id)) byId.set(p.external_id, { ...p, category: categorize(p) });
+  }
 
-  // Dated posts sort newest first. Undated posts (Facebook search results,
-  // which the vendor returns with no timestamp) get a reserved share of the
-  // slice instead of being sorted as "equal" to everything: a stable sort
-  // leaves them stranded behind any full page of dated results, so Facebook
-  // could bill a credit and still render zero cards.
+  // Second pass: comments on the posts that carry a buyer signal, which is the
+  // isFresh -> isPromotionalPost -> hasBuyerSignal survivors and nothing else.
+  const shortlist = Array.from(byId.values()).filter((p) => p.category === CATEGORY_BUYER);
+  console.log(
+    `discover "${q}": raw=${raw.length} (${JSON.stringify(byPlatform)}) fresh=${isFreshOnly.length} notPromo=${notPromo.length} buyerSignal=${shortlist.length}`,
+  );
+  for (const r of await surfaceReplies(shortlist, q)) {
+    if (!byId.has(r.external_id)) byId.set(r.external_id, { ...r, category: categorize(r) });
+  }
+
+  // Dated posts sort newest first, buyer signal ahead of general conversation
+  // so widening the pool cannot push a lead off the page. Undated posts
+  // (Facebook search results and Facebook comments, which the vendor returns
+  // with no timestamp) get a reserved share of the slice instead of being
+  // sorted as "equal" to everything: a stable sort leaves them stranded behind
+  // any full page of dated results, so Facebook could bill a credit and still
+  // render zero cards.
   const deduped = Array.from(byId.values());
+  const rank = (p: ScrapedPost) => (p.category === CATEGORY_BUYER ? 0 : 1);
   const dated = deduped
     .filter((p) => p.posted_at !== undefined)
-    .sort((a, b) => Date.parse(b.posted_at!) - Date.parse(a.posted_at!));
-  const undated = deduped.filter((p) => p.posted_at === undefined);
+    .sort((a, b) => rank(a) - rank(b) || Date.parse(b.posted_at!) - Date.parse(a.posted_at!));
+  const undated = deduped
+    .filter((p) => p.posted_at === undefined)
+    .sort((a, b) => rank(a) - rank(b));
   const reserved = Math.min(undated.length, 2, limit);
   return [...dated.slice(0, limit - reserved), ...undated.slice(0, reserved)];
 }

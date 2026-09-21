@@ -1,5 +1,5 @@
 import type { ScrapedPost, SourceResult } from "../types";
-import { getJson, externalIdFromUrl, SourceError } from "./http";
+import { getJson, externalIdFromUrl, replyPost, SourceError } from "./http";
 
 /**
  * SocialAPIs.io: the Facebook discovery source.
@@ -29,7 +29,7 @@ function headers(): Record<string, string> {
 /** Live responses put the array on `data.items`; their docs say `data.results`. Accept either. */
 function items(json: any): any[] {
   const d = json?.data ?? json;
-  return d?.items ?? d?.results ?? d?.posts ?? (Array.isArray(d) ? d : []);
+  return d?.items ?? d?.results ?? d?.posts ?? d?.comments ?? (Array.isArray(d) ? d : []);
 }
 
 /**
@@ -40,7 +40,14 @@ function items(json: any): any[] {
  */
 function textOf(p: any): string {
   return String(
-    p?.basic_info?.post_text ?? p?.message ?? p?.text ?? p?.content ?? p?.description ?? "",
+    p?.basic_info?.post_text ??
+      p?.message ??
+      p?.text ??
+      p?.body ??
+      p?.comment_text ??
+      p?.content ??
+      p?.description ??
+      "",
   ).trim();
 }
 
@@ -157,4 +164,69 @@ export function groupsMentionedIn(json: any): { url: string; name?: string }[] {
     if (typeof url === "string" && url.includes("/groups/")) out.set(url, g?.name);
   }
   return Array.from(out, ([url, name]) => ({ url, name }));
+}
+
+/**
+ * Top-level comments on one post. 1 credit per call, flat rate, up to 30
+ * comments — so the reply pass costs at most one credit per shortlisted post,
+ * and never more.
+ *
+ * Top level ONLY. The sibling `/facebook/posts/comments/replies` endpoint
+ * exists and would reach nested replies, but it is priced per PARENT COMMENT,
+ * not per post, so one thread with 30 comments could cost 30 credits. It is
+ * deliberately not called: v1 buys breadth across posts, not depth inside one.
+ * Retries are off for the same reason as every other call in this file — a
+ * retry is a second charge.
+ *
+ * The vendor exposes no per-comment timestamp, so `posted_at` is left
+ * undefined rather than inherited from the parent (which would misreport
+ * freshness); these land in the caller's undated reserved slice.
+ */
+const COMMENTS_TIMEOUT_MS = 5000;
+
+export async function fetchReplies(
+  post: ScrapedPost,
+  { limit = 30 }: { limit?: number } = {},
+): Promise<SourceResult> {
+  if (!/(^|\.)facebook\.com$/i.test(hostOf(post.url))) {
+    return { posts: [], unitsCharged: 0, errors: ["not a facebook.com post url"] };
+  }
+  const params = new URLSearchParams({
+    link: post.url,
+    limit: String(Math.min(30, Math.max(1, limit))),
+  });
+  const json = await getJson(
+    `${BASE}/facebook/posts/comments?${params}`,
+    { headers: headers() },
+    // Retries stay off (a retry is a second charge), and the timeout is
+    // tighter than the free sources' REPLY_FETCH_LIMITS on purpose. The caller
+    // runs Facebook's posts strictly serially inside a single lane deadline
+    // and only checks that deadline BEFORE starting a call, so a call already
+    // in flight can outlive it — and an in-flight call that is abandoned still
+    // charges its credit. MAX_REPLY_POSTS.facebook (2) of these back to back
+    // must therefore fit inside REPLY_BUDGET_MS (12s) with margin, or the
+    // second credit buys comments nobody ever sees.
+    { retries: 0, timeoutMs: COMMENTS_TIMEOUT_MS },
+  );
+  const posts = items(json)
+    .map((c: any, i: number) =>
+      replyPost(post, {
+        id: String(c?.id ?? c?.comment_id ?? c?.feedback_id ?? c?.comment_feedback_id ?? i),
+        url: typeof c?.url === "string" && c.url.startsWith("http") ? c.url : post.url,
+        body: textOf(c),
+        author:
+          c?.author?.name ?? c?.owner?.name ?? c?.user?.name ?? c?.commenter?.name ?? undefined,
+      }),
+    )
+    .filter((p): p is ScrapedPost => p !== null);
+  const charged = json?.meta?.creditsCharged;
+  return { posts, unitsCharged: typeof charged === "number" ? charged : 1, errors: [] };
+}
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return "";
+  }
 }

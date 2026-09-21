@@ -86,7 +86,23 @@ export interface ScrapedPost {
   posted_at?: string;
   /** The query that surfaced this post, so query yield can be measured. */
   source_query?: string;
+  /**
+   * Bucket shown on every card. Discovery stamps one of the two deterministic
+   * labels below from the seller/buyer regex flags it already computed (no
+   * model call, ever, in the discovery lane). `/api/analyze-post` overwrites it
+   * with the AI's own free-form category once a human clicks Generate, so this
+   * is a plain string rather than a closed union.
+   */
+  category?: string;
+  /** True when this row is a comment/answer surfaced out of another post's thread. */
+  is_reply?: boolean;
+  /** The thread this reply came from, so a card can link back to it. */
+  parent_url?: string;
 }
+
+/** Deterministic discovery categories. The AI may return anything else. */
+export const CATEGORY_BUYER = "high-potential customer";
+export const CATEGORY_GENERAL = "general conversation";
 
 /** A candidate row in the approval queue after AI analysis. */
 export interface Candidate {

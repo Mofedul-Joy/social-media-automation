@@ -1,3 +1,4 @@
+import { CATEGORY_BUYER, CATEGORY_GENERAL } from "./types";
 import type { ScrapedPost } from "./types";
 
 /**
@@ -71,4 +72,15 @@ const BUYER_SIGNAL_PATTERNS: RegExp[] = [
 export function hasBuyerSignal(post: ScrapedPost): boolean {
   const text = `${post.title ?? ""} ${post.body}`;
   return BUYER_SIGNAL_PATTERNS.some((re) => re.test(text));
+}
+
+/**
+ * The category every discovery result carries, derived from the two regex
+ * flags above and nothing else — discovery has no model call to spend. A post
+ * that asks for something is a lead; one that merely talks about the topic is
+ * conversation. `/api/analyze-post` replaces this with the AI's own label for
+ * the single post a human chooses to act on.
+ */
+export function categorize(post: ScrapedPost): string {
+  return hasBuyerSignal(post) ? CATEGORY_BUYER : CATEGORY_GENERAL;
 }
