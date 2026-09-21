@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { loadBusinessContext } from "@/lib/config";
 import { discoverPosts } from "@/lib/discoverPosts";
+import { recordTopic } from "@/lib/topics";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -30,6 +31,17 @@ export async function POST(req: Request) {
     );
   }
   const q = topic.trim();
+  // Remembered before discovery runs, not after: the user searched this topic
+  // whether or not anything came back, and a discovery failure is exactly the
+  // search they are most likely to want to retry from the list. Awaited so it
+  // cannot be cut off by the function freezing, and swallowed so a missing
+  // `search_topics` table degrades to "no saved list" instead of breaking the
+  // search itself.
+  try {
+    await recordTopic(q);
+  } catch (err) {
+    console.error(`POST /api/topic-search: could not record topic: ${(err as Error).message}`);
+  }
   // A Supabase read can throw (see lib/config.ts); without a catch here Next
   // answers with a bare 500 and a zero-byte body, same failure /api/config had.
   try {
