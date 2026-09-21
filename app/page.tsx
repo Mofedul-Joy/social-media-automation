@@ -1,66 +1,39 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Search, Loader2, ArrowLeft, Radio, Sparkles, Info, Check, RotateCcw, UserRound, PenLine } from "lucide-react";
+import {
+  Search,
+  Loader2,
+  ArrowLeft,
+  Radio,
+  Sparkles,
+  Check,
+  RotateCcw,
+  UserRound,
+  PenLine,
+  Bookmark,
+} from "lucide-react";
 import type { BusinessContext, Platform, ScrapedPost } from "@/lib/types";
-// Type-only, and `import type` is erased before bundling — lib/topics.ts holds
-// the service-role Supabase client and must never reach the browser.
+import { CATEGORY_BUYER, CATEGORY_GENERAL } from "@/lib/types";
+// Type-only, and `import type` is erased before bundling — lib/topics.ts and
+// lib/savedPosts.ts hold the service-role Supabase client and must never reach
+// the browser.
 import type { SearchTopic } from "@/lib/topics";
+import type { SavedPost } from "@/lib/savedPosts";
 import { splitDescription, joinDescription } from "@/lib/businessNarrative";
+import { toCsv, downloadCsv, csvFilename } from "@/lib/csv";
+import { decodeEntities } from "@/lib/text";
 import { PlatformIcon, PLATFORM_COLOR } from "./components/PlatformIcon";
-import { PostCard } from "./components/PostCard";
+import { InfoTip } from "./components/InfoTip";
+import { PostRow } from "./components/PostRow";
+import { ResultsSidebar, type SidebarFilters } from "./components/ResultsSidebar";
 
 /** One shared look for every text control on this page, so the context inputs and the search box read as one family. */
 const FIELD_CLASS =
   "w-full text-[15px] leading-relaxed rounded-xl bg-[rgba(255,255,255,0.05)] border border-[color:var(--border)] " +
   "focus:border-[color:var(--primary)] focus:shadow-[0_0_0_3px_rgba(225,29,72,0.28)] outline-none px-4 py-3 text-[color:var(--text)] " +
   "placeholder:text-[color:var(--faint)] [color-scheme:dark]";
-
-/**
- * The "i" beside each context label. The tooltip text is carried by the
- * button's aria-label and the bubble itself is aria-hidden, so a screen reader
- * gets it once rather than twice. It opens on hover AND on keyboard focus
- * (`group-focus-within`), so it is not a mouse-only affordance.
- *
- * Solid `--bg-2` rather than the page's `.glass`: a translucent bubble over a
- * translucent card puts the same hue behind the same hue, which is the one
- * thing this UI must never do.
- */
-function InfoTip({ text }: { text: string }) {
-  return (
-    // Deliberately NOT `relative`: the bubble resolves against the label row
-    // instead, so its width is capped at the row's width. Anchored to the
-    // 18px icon it would hang off the right edge on a phone and give the whole
-    // page a horizontal scrollbar even while invisible.
-    <span className="group inline-flex">
-      <button
-        type="button"
-        aria-label={text}
-        className="btn relative after:absolute after:content-[''] after:-inset-2.5 w-6 h-6 rounded-full grid place-items-center border border-[color:var(--border-strong)] text-[color:var(--muted)] hover:text-[color:var(--text)] hover:border-[color:var(--text)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--primary-2)]"
-      >
-        <Info className="w-3.5 h-3.5" strokeWidth={2.4} />
-      </button>
-      <span
-        aria-hidden="true"
-        className="pointer-events-none absolute left-0 top-full mt-2 z-30 w-[min(22rem,92%)] rounded-xl px-3.5 py-2.5 text-[13px] leading-snug text-left opacity-0 translate-y-1 transition-[opacity,transform] duration-150 group-hover:opacity-100 group-hover:translate-y-0 group-focus-within:opacity-100 group-focus-within:translate-y-0"
-        // Lighter than the card and narrower than the field it covers. A
-        // bubble darker than its surroundings reads as a hole rather than as
-        // something floating, and at phone width it lands exactly on the
-        // textarea — where, matched in width and tone, it looks like typed
-        // content instead of a tip.
-        style={{
-          background: "#1b1b27",
-          color: "var(--text)",
-          border: "1px solid rgba(255,255,255,0.22)",
-          boxShadow: "0 20px 44px -14px rgba(0,0,0,0.9)",
-        }}
-      >
-        {text}
-      </span>
-    </span>
-  );
-}
 
 function Field({ id, label, tip, children }: { id: string; label: string; tip: string; children: React.ReactNode }) {
   return (
@@ -88,6 +61,40 @@ function ago(iso: string): string {
   return new Date(iso).toLocaleDateString();
 }
 
+/**
+ * Fixed order for the platform filters, so ticking one never reshuffles the
+ * list under the cursor. Only the platforms actually present are rendered.
+ */
+const PLATFORM_ORDER: Platform[] = [
+  "reddit",
+  "facebook",
+  "instagram",
+  "threads",
+  "hackernews",
+  "stackexchange",
+];
+
+/** Same idea for the type filters: the two discovery buckets, always this way round. */
+const CATEGORY_ORDER = [CATEGORY_BUYER, CATEGORY_GENERAL];
+
+/**
+ * A saved link with no matching live result, dressed as a post so the one row
+ * component renders it. `saved_posts` stores the address and nothing else
+ * (issue 05), so `body` is genuinely empty and the row is marked `linkOnly` —
+ * it says the text was never stored rather than showing a blank post.
+ */
+function savedAsPost(s: SavedPost): ScrapedPost {
+  return {
+    platform: s.platform as Platform,
+    external_id: s.url,
+    url: s.url,
+    author: s.author ?? undefined,
+    title: s.title ?? undefined,
+    body: "",
+    scraped_at: s.saved_at,
+  };
+}
+
 export default function Home() {
   const [topic, setTopic] = useState("");
   const [view, setView] = useState<"input" | "results">("input");
@@ -108,6 +115,16 @@ export default function Home() {
   const [ctxUnavailable, setCtxUnavailable] = useState(false);
 
   const [topics, setTopics] = useState<SearchTopic[]>([]);
+
+  // --- saved links + sidebar filters (issues 05, 06) ------------------------
+  const [saved, setSaved] = useState<SavedPost[]>([]);
+  /** True once the store has answered that it cannot be reached. Hides the Saved filter. */
+  const [savedUnavailable, setSavedUnavailable] = useState(false);
+  const [filters, setFilters] = useState<SidebarFilters>({
+    platforms: [],
+    categories: [],
+    savedOnly: false,
+  });
 
   useEffect(() => {
     fetch("/api/config")
@@ -131,6 +148,22 @@ export default function Home() {
   // convenience, and it must not be able to stop the context inputs loading.
   useEffect(() => {
     refreshTopics();
+  }, []);
+
+  /**
+   * The saved links, loaded once. `/api/saved` answers 200 with
+   * `unavailable: true` when the store is unreachable rather than an error
+   * status, so a missing `saved_posts` table costs the Saved filter and
+   * nothing else — searching, filtering and exporting all still work.
+   */
+  useEffect(() => {
+    fetch("/api/saved")
+      .then((r) => r.json())
+      .then((d) => {
+        setSaved((d.saved ?? []) as SavedPost[]);
+        setSavedUnavailable(d.unavailable === true);
+      })
+      .catch(() => setSavedUnavailable(true));
   }, []);
 
   const enabledPlatforms = (Object.entries(ctx?.platforms ?? {}) as [Platform, { enabled: boolean }][])
@@ -208,6 +241,156 @@ export default function Home() {
     }
   }
 
+  // --- saved links ---------------------------------------------------------
+  const savedUrls = useMemo(() => new Set(saved.map((s) => s.url)), [saved]);
+
+  /**
+   * The page owns saved state so the bookmark on a row and the count in the
+   * sidebar are the same fact. Returns the message to show in the row on
+   * failure, null on success — the row never assumes a click worked.
+   */
+  async function toggleSave(post: ScrapedPost): Promise<string | null> {
+    const isSaved = savedUrls.has(post.url);
+    try {
+      if (isSaved) {
+        const res = await fetch(`/api/saved?url=${encodeURIComponent(post.url)}`, { method: "DELETE" });
+        const d = await res.json().catch(() => ({}));
+        if (!res.ok || d.ok === false) {
+          return d.error ?? `Could not unsave (${res.status}). Nothing was removed.`;
+        }
+        setSaved((prev) => prev.filter((s) => s.url !== post.url));
+        return null;
+      }
+      const res = await fetch("/api/saved", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          platform: post.platform,
+          url: post.url,
+          title: post.title ?? null,
+          author: post.author ?? null,
+        }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok || d.ok === false) {
+        return d.error ?? `Could not save (${res.status}). Nothing was saved.`;
+      }
+      // Re-saving upserts on url server-side, so filtering the old entry out
+      // keeps that a no-op here too rather than a second row in the list.
+      setSaved((prev) => [d.saved as SavedPost, ...prev.filter((s) => s.url !== post.url)]);
+      setSavedUnavailable(false);
+      return null;
+    } catch {
+      return isSaved
+        ? "Could not reach the server. Nothing was removed."
+        : "Could not reach the server. Nothing was saved.";
+    }
+  }
+
+  /**
+   * Generating a comment is the only time a human reads a post, so the AI's
+   * own label replaces the regex bucket on the post itself — otherwise the
+   * chip on the row and the count in the sidebar would disagree about it.
+   */
+  function applyCategory(url: string, category: string) {
+    setPosts((prev) => prev.map((p) => (p.url === url ? { ...p, category } : p)));
+  }
+
+  // --- what the stack shows ------------------------------------------------
+  /**
+   * Saved off, the pool is the live results. Saved on, it is the saved library
+   * instead, with the live result merged in wherever one matches — that is what
+   * makes a link saved during an earlier search still reachable, which is the
+   * entire point of persisting it. An entry with no live match has no body to
+   * show and is marked `linkOnly`.
+   */
+  const pool = useMemo(() => {
+    if (!filters.savedOnly) {
+      return posts.map((p) => ({ post: p, linkOnly: false, savedAt: null as string | null }));
+    }
+    const live = new Map(posts.map((p) => [p.url, p]));
+    return saved.map((s) => {
+      const match = live.get(s.url);
+      return match
+        ? { post: match, linkOnly: false, savedAt: s.saved_at }
+        : { post: savedAsPost(s), linkOnly: true, savedAt: s.saved_at };
+    });
+  }, [filters.savedOnly, posts, saved]);
+
+  // AND logic across the three dimensions (issue 06). A link-only saved entry
+  // carries no category, so it correctly matches no category filter.
+  const okPlatform = (p: ScrapedPost) =>
+    filters.platforms.length === 0 || filters.platforms.includes(p.platform);
+  const okCategory = (p: ScrapedPost) =>
+    filters.categories.length === 0 || (!!p.category && filters.categories.includes(p.category));
+
+  const visible = pool.filter((r) => okPlatform(r.post) && okCategory(r.post));
+
+  /**
+   * Counts are computed here, against rows the page already holds — no extra
+   * API call (issue 06). Each dimension counts with the OTHER filters applied
+   * but not its own, so a platform's number answers "how many would I get if I
+   * ticked this", not "how many are showing".
+   */
+  const platformCounts = PLATFORM_ORDER.filter(
+    (p) => pool.some((r) => r.post.platform === p) || filters.platforms.includes(p),
+  ).map((platform) => ({
+    platform,
+    count: pool.filter((r) => r.post.platform === platform && okCategory(r.post)).length,
+  }));
+
+  const categoryCounts = CATEGORY_ORDER.concat(
+    // Anything the AI named that is not one of the two discovery buckets.
+    Array.from(new Set(pool.map((r) => r.post.category).filter((c): c is string => !!c))).filter(
+      (c) => !CATEGORY_ORDER.includes(c),
+    ),
+  )
+    .filter((c) => pool.some((r) => r.post.category === c) || filters.categories.includes(c))
+    .map((category) => ({
+      category,
+      count: pool.filter((r) => r.post.category === category && okPlatform(r.post)).length,
+    }));
+
+  /**
+   * What ticking Saved would show, counted the same way. Null hides the filter
+   * outright, which is what an unreachable store gets.
+   */
+  const savedCount = savedUnavailable
+    ? null
+    : (() => {
+        const live = new Map(posts.map((p) => [p.url, p]));
+        return saved
+          .map((s) => live.get(s.url) ?? savedAsPost(s))
+          .filter((p) => okPlatform(p) && okCategory(p)).length;
+      })();
+
+  /** Exports exactly the rows on screen, with that view's visible columns (issue 09). */
+  function exportCsv() {
+    const headers = [
+      "Platform",
+      "Type",
+      "Author",
+      "Title",
+      "Posted at",
+      "URL",
+      "Reply to",
+      ...(filters.savedOnly ? ["Saved at"] : []),
+      "Body",
+    ];
+    const rows = visible.map((r) => [
+      r.post.platform,
+      r.post.category ?? "",
+      decodeEntities(r.post.author ?? ""),
+      decodeEntities(r.post.title ?? ""),
+      r.post.posted_at ?? "",
+      r.post.url,
+      r.post.parent_url ?? "",
+      ...(filters.savedOnly ? [r.savedAt ?? ""] : []),
+      r.linkOnly ? "" : decodeEntities(r.post.body),
+    ]);
+    downloadCsv(csvFilename(filters.savedOnly ? "saved" : topic), toCsv(headers, rows));
+  }
+
   const canSearch = topic.trim().length > 0 && !loading;
 
   /**
@@ -222,6 +405,9 @@ export default function Home() {
     setView("results");
     setPosts([]);
     setError(null);
+    // A filter left over from the last topic would silently hide the new
+    // results, and the empty state would blame the search for it.
+    setFilters({ platforms: [], categories: [], savedOnly: false });
     // Optimistic only so the row is there the instant you come back from the
     // results, never as the final word: the write really happens server-side
     // inside /api/topic-search, and refreshTopics() below replaces this guess
@@ -254,7 +440,15 @@ export default function Home() {
   }
 
   return (
-    <main className="relative z-10 mx-auto max-w-6xl px-5 sm:px-8 py-10">
+    // The results view needs the width: a row is a readable post body plus a
+    // fixed Control Center, and at max-w-6xl the body column is narrower than
+    // the card grid it replaced. The input view keeps its original measure.
+    <main
+      className={
+        "relative z-10 mx-auto px-5 sm:px-8 py-10 " +
+        (view === "results" ? "max-w-[1400px]" : "max-w-6xl")
+      }
+    >
       {/* top brand */}
       <header className="flex items-center justify-between mb-10">
         <div className="flex items-center gap-2.5">
@@ -266,13 +460,33 @@ export default function Home() {
             <div className="text-[11px] text-[color:var(--faint)] -mt-0.5">Engagement Studio</div>
           </div>
         </div>
-        <a
-          href="/compose"
-          className="inline-flex items-center gap-2 text-sm font-medium text-[color:var(--muted)] hover:text-[color:var(--text)] glass rounded-full px-4 py-2 transition-colors"
-        >
-          <PenLine className="w-4 h-4" strokeWidth={2.2} />
-          Compose
-        </a>
+        <div className="flex items-center gap-2">
+          {/*
+            Saved links are reachable from the sidebar, but only once a search
+            has been run — and after a reload there is no search. Without this
+            the one thing persisting them is for would need a search first.
+          */}
+          {!savedUnavailable && (
+            <button
+              onClick={() => {
+                setFilters({ platforms: [], categories: [], savedOnly: true });
+                setView("results");
+              }}
+              className="btn inline-flex items-center gap-2 text-sm font-medium text-[color:var(--muted)] hover:text-[color:var(--text)] glass rounded-full px-4 py-2"
+            >
+              <Bookmark className="w-4 h-4" strokeWidth={2.2} />
+              Saved
+              <span className="tabular-nums text-[color:var(--text)]">{saved.length}</span>
+            </button>
+          )}
+          <a
+            href="/compose"
+            className="inline-flex items-center gap-2 text-sm font-medium text-[color:var(--muted)] hover:text-[color:var(--text)] glass rounded-full px-4 py-2 transition-colors"
+          >
+            <PenLine className="w-4 h-4" strokeWidth={2.2} />
+            Compose
+          </a>
+        </div>
       </header>
 
       <AnimatePresence mode="wait">
@@ -495,41 +709,85 @@ export default function Home() {
             transition={{ duration: 0.35 }}
           >
             {/* results header */}
-            <div className="flex flex-wrap items-center gap-4 mb-6">
+            <div className="flex flex-wrap items-baseline gap-x-4 gap-y-2 mb-6">
               <button
                 onClick={() => setView("input")}
-                className="btn inline-flex items-center gap-1.5 text-sm font-medium text-[color:var(--muted)] hover:text-[color:var(--text)]"
+                className="btn inline-flex items-center gap-1.5 text-[15px] font-medium text-[color:var(--muted)] hover:text-[color:var(--text)] self-center"
               >
-                <ArrowLeft className="w-4 h-4" /> New search
+                <ArrowLeft className="w-4 h-4" strokeWidth={2.2} /> New search
               </button>
-              <div className="h-4 w-px bg-[color:var(--border-strong)]" />
-              <div className="flex flex-wrap items-center gap-1.5 text-sm">
-                <span className="text-[color:var(--faint)]">Recent posts for</span>
-                <span className="font-medium text-[color:var(--text)]">{topic}</span>
-              </div>
+              <div className="h-4 w-px bg-[color:var(--border-strong)] self-center" />
+              <h2 className="text-[17px] font-semibold text-[color:var(--text)]">
+                {filters.savedOnly ? "Saved links" : <>Recent posts for “{topic}”</>}
+              </h2>
+              {!loading && (
+                <span className="text-[15px] text-[color:var(--muted)] tabular-nums">
+                  {visible.length === pool.length
+                    ? `${pool.length} ${pool.length === 1 ? "result" : "results"}`
+                    : `${visible.length} of ${pool.length} showing`}
+                </span>
+              )}
             </div>
 
             {error && (
-              <div className="glass rounded-2xl p-6 mb-4 text-sm text-[color:var(--red)]">{error}</div>
+              <div className="glass rounded-2xl p-6 mb-4 text-[15px] text-[color:var(--red)]">{error}</div>
             )}
 
-            {loading ? (
-              <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                {Array.from({ length: 6 }).map((_, i) => (
-                  <div key={i} className="glass rounded-2xl p-5 h-64 skeleton" />
-                ))}
+            <div className="flex flex-col lg:flex-row gap-6 items-start">
+              <ResultsSidebar
+                platformCounts={platformCounts}
+                categoryCounts={categoryCounts}
+                savedCount={savedCount}
+                filters={filters}
+                onChange={setFilters}
+                onExport={exportCsv}
+                exportLabel={`Export ${visible.length} ${visible.length === 1 ? "row" : "rows"} to CSV`}
+                exportDisabled={visible.length === 0}
+              />
+
+              <div className="flex-1 min-w-0 w-full flex flex-col gap-4">
+                {loading ? (
+                  Array.from({ length: 4 }).map((_, i) => (
+                    <div key={i} className="glass rounded-2xl h-56 skeleton" />
+                  ))
+                ) : visible.length === 0 ? (
+                  <div className="glass rounded-2xl p-12 sm:p-16 text-[color:var(--muted)]">
+                    <p className="text-[17px] text-[color:var(--text)] font-semibold mb-2">
+                      {pool.length > 0
+                        ? "Nothing matches those filters."
+                        : filters.savedOnly
+                          ? "You have not saved any links yet."
+                          : topic
+                            ? "No fresh posts on that topic right now."
+                            : "Nothing searched yet."}
+                    </p>
+                    <p className="text-[15px] leading-relaxed">
+                      {pool.length > 0
+                        ? "Untick a filter on the left, or clear them all."
+                        : filters.savedOnly
+                          ? "Use Save as link on a result and it will be here next time, from any search."
+                          : topic
+                            ? "Try a broader phrase, or one that sounds more like how someone would ask for help."
+                            : "Start a new search, or tick Saved links only to see what you have kept."}
+                    </p>
+                  </div>
+                ) : (
+                  visible.map((r, i) => (
+                    <PostRow
+                      key={r.post.external_id}
+                      post={r.post}
+                      index={i}
+                      saved={savedUrls.has(r.post.url)}
+                      onToggleSave={toggleSave}
+                      onAnalyzed={applyCategory}
+                      linkOnly={r.linkOnly}
+                      savedAgo={r.savedAt ? ago(r.savedAt) : null}
+                      onToast={flash}
+                    />
+                  ))
+                )}
               </div>
-            ) : !error && posts.length === 0 ? (
-              <div className="glass rounded-2xl p-16 text-center text-[color:var(--muted)]">
-                No fresh posts on that topic right now. Try a broader phrase.
-              </div>
-            ) : (
-              <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                {posts.map((post, i) => (
-                  <PostCard key={post.external_id} post={post} index={i} onToast={flash} />
-                ))}
-              </div>
-            )}
+            </div>
           </motion.section>
         )}
       </AnimatePresence>

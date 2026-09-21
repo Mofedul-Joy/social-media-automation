@@ -23,6 +23,12 @@
   --threads: #8a8a8a;
   --green: #22c55e;
   --red: #ff6b6b;
+
+  /*
+   * How tall a result row's post body may grow before it scrolls in place
+   * (app/components/PostRow.tsx). Measured against live results, not guessed.
+   */
+  --row-body-h: 18rem;
 }
 
 * { -webkit-font-smoothing: antialiased; }
