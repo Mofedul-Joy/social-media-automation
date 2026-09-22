@@ -13,6 +13,7 @@ import {
   UserRound,
   PenLine,
   Bookmark,
+  BarChart3,
 } from "lucide-react";
 import type { BusinessContext, Platform, ScrapedPost } from "@/lib/types";
 import { CATEGORY_BUYER, CATEGORY_GENERAL } from "@/lib/types";
@@ -479,6 +480,13 @@ export default function Home() {
               <span className="tabular-nums text-[color:var(--text)]">{saved.length}</span>
             </button>
           )}
+          <a
+            href="/analytics"
+            className="inline-flex items-center gap-2 text-sm font-medium text-[color:var(--muted)] hover:text-[color:var(--text)] glass rounded-full px-4 py-2 transition-colors"
+          >
+            <BarChart3 className="w-4 h-4" strokeWidth={2.2} />
+            Counts
+          </a>
           <a
             href="/compose"
             className="inline-flex items-center gap-2 text-sm font-medium text-[color:var(--muted)] hover:text-[color:var(--text)] glass rounded-full px-4 py-2 transition-colors"
