@@ -13,7 +13,7 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, Circle, CircleCheck, Info, Loader2, Plus, Radio, Save, Trash2, X } from "lucide-react";
+import { ArrowLeft, BarChart3, Circle, CircleCheck, Info, Loader2, Plus, Radio, Save, Trash2, X } from "lucide-react";
 import type { Platform } from "@/lib/types";
 import { PlatformIcon, PLATFORM_COLOR, PLATFORM_LABEL } from "./PlatformIcon";
 import { formatForPlatform } from "@/lib/compose";
@@ -211,12 +211,20 @@ export function Composer({
             <div className="text-[11px] text-[color:var(--muted)] -mt-0.5">Engagement Studio</div>
           </div>
         </div>
-        <Link
-          href="/"
-          className="btn text-[15px] font-medium px-4 py-2.5 rounded-xl inline-flex items-center gap-2 border border-[color:var(--border-strong)] bg-[rgba(255,255,255,0.04)] hover:bg-[rgba(255,255,255,0.09)] text-[color:var(--text)] whitespace-nowrap"
-        >
-          <ArrowLeft className="w-4 h-4" /> Find posts
-        </Link>
+        <div className="flex items-center gap-2">
+          <Link
+            href="/analytics"
+            className="btn inline-flex items-center gap-2 text-sm font-medium text-[color:var(--muted)] hover:text-[color:var(--text)] glass rounded-full px-4 py-2 whitespace-nowrap"
+          >
+            <BarChart3 className="w-4 h-4" strokeWidth={2.2} /> Counts
+          </Link>
+          <Link
+            href="/"
+            className="btn text-[15px] font-medium px-4 py-2.5 rounded-xl inline-flex items-center gap-2 border border-[color:var(--border-strong)] bg-[rgba(255,255,255,0.04)] hover:bg-[rgba(255,255,255,0.09)] text-[color:var(--text)] whitespace-nowrap"
+          >
+            <ArrowLeft className="w-4 h-4" /> Find posts
+          </Link>
+        </div>
       </header>
 
       <div className="max-w-3xl mb-8">

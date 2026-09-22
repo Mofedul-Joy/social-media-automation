@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { loadBusinessContext } from "@/lib/config";
 import { discoverPosts } from "@/lib/discoverPosts";
 import { recordTopic } from "@/lib/topics";
+import { recordDiscoveryCounts } from "@/lib/analytics";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -49,6 +50,19 @@ export async function POST(req: Request) {
     // Not a failure: "nothing live on this topic right now" is a normal answer,
     // so an empty list is a 200 and the UI renders its own empty state.
     const posts = await discoverPosts(q, ctx, { limit: MAX_RESULTS });
+    // Recorded here because this is the only moment the numbers exist: the
+    // posts go to the browser and are never persisted, so a count not taken now
+    // can never be reconstructed. Awaited so it cannot be cut off by the
+    // function freezing, and swallowed for the same reason recordTopic is — a
+    // missing `discovery_counts` table or a failed foreign key must degrade to
+    // "no analytics", never to a broken search.
+    try {
+      await recordDiscoveryCounts(q, posts);
+    } catch (err) {
+      console.error(
+        `POST /api/topic-search: could not record discovery counts: ${(err as Error).message}`,
+      );
+    }
     return NextResponse.json({ topic: q, posts });
   } catch (err) {
     console.error(`POST /api/topic-search: ${(err as Error).message}`);
