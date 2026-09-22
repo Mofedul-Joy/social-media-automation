@@ -22,12 +22,20 @@
  */
 
 const {
-  SUPABASE_URL,
   SUPABASE_SERVICE_ROLE_KEY,
   AI_WORKER_URL,
   APP_URL,
   ALERT_WEBHOOK,
+  SUPABASE_PROJECT_REF,
 } = process.env;
+
+// Two env files are in play and they name this differently. The app's own
+// `.env` sets SUPABASE_URL. The workspace `.env` that holds the production
+// values sets SUPABASE_PROJECT_REF instead. Accept either, so one cron line
+// works no matter which file is sourced.
+const SUPABASE_URL =
+  process.env.SUPABASE_URL ||
+  (SUPABASE_PROJECT_REF ? `https://${SUPABASE_PROJECT_REF}.supabase.co` : "");
 
 const TIMEOUT_MS = 15000;
 
