@@ -28,6 +28,7 @@ import { PlatformIcon, PLATFORM_COLOR } from "./components/PlatformIcon";
 import { InfoTip } from "./components/InfoTip";
 import { PostRow } from "./components/PostRow";
 import { ResultsSidebar, type SidebarFilters } from "./components/ResultsSidebar";
+import { NotificationBell } from "./components/NotificationBell";
 
 /** One shared look for every text control on this page, so the context inputs and the search box read as one family. */
 const FIELD_CLASS =
@@ -479,6 +480,12 @@ export default function Home() {
               <span className="tabular-nums text-[color:var(--text)]">{saved.length}</span>
             </button>
           )}
+          {/*
+            New replies on the posts above. Checks when this page opens and
+            when Hon presses refresh inside it — never on a schedule, because
+            each check spends a Facebook credit per saved Facebook post.
+          */}
+          <NotificationBell />
           <a
             href="/compose"
             className="inline-flex items-center gap-2 text-sm font-medium text-[color:var(--muted)] hover:text-[color:var(--text)] glass rounded-full px-4 py-2 transition-colors"
