@@ -41,7 +41,10 @@ export interface ReplyNotification {
 export interface PollStats {
   /** Posts actually fetched from a source. */
   polled: number;
-  /** Eligible posts left unpolled this run: cooldown, or over a per-run cap. */
+  /**
+   * Eligible posts left unpolled this run: inside the cooldown, over a per-run
+   * cap, past the wall-clock budget, or claimed by a concurrent run.
+   */
   skipped: number;
   /** Saved posts on a platform with no reply source at all. */
   unsupported: number;
@@ -83,6 +86,24 @@ export const MAX_FACEBOOK_POLLS_PER_RUN = 10;
 export const MAX_FREE_POLLS_PER_RUN = 50;
 /** Same courtesy gap the discovery reply pass uses — Arctic Shift is a free volunteer archive. */
 const REDDIT_COURTESY_MS = 1500;
+/**
+ * Wall-clock budget for a whole run, in the same shape as the discovery reply
+ * pass. The caps alone do not bound the time: 50 Reddit posts at the courtesy
+ * gap above is 75s of sleeping before a single fetch is counted, which is
+ * already past the route's own `maxDuration = 60`. A lane stops STARTING new
+ * posts once this passes and reports the rest as skipped; the oldest-first
+ * ordering means the next run picks them up. 45s leaves room for the route's
+ * follow-up count and feed read.
+ */
+const POLL_BUDGET_MS = 45_000;
+/**
+ * A forced (manual refresh) run ignores the ten-minute cooldown, but not this.
+ * Two runs overlapping — two tabs, or a reload while a slow Facebook lane is
+ * still going — would otherwise each claim the same posts and each pay for
+ * them. Thirty seconds is long enough that a second trigger cannot double the
+ * bill and short enough that pressing refresh still means refresh.
+ */
+const FORCE_CLAIM_FLOOR_MS = 30_000;
 
 const MAX_SNIPPET_LEN = 400;
 const MAX_AUTHOR_LEN = 200;
@@ -166,14 +187,17 @@ export async function unreadCount(): Promise<number> {
 }
 
 /**
- * Mark replies read. With ids, only those; with none (or an empty array),
- * every unseen row — that is the "mark all read" case, and it filters on
- * `seen_by_user = false` rather than updating the whole table so an old feed
- * is not rewritten on every click.
+ * Mark replies read. `undefined` means ALL — the "mark all read" case, which
+ * filters on `seen_by_user = false` rather than rewriting the whole table on
+ * every click. An explicitly EMPTY array means nothing, and does nothing: a
+ * caller that computed a list and got none back is asking for no change, and
+ * silently upgrading that to "clear everything" is the kind of landmine that
+ * only goes off once.
  */
 export async function markSeen(ids?: string[]): Promise<void> {
+  if (ids && ids.length === 0) return;
   const q = getSupabase().from("saved_post_replies").update({ seen_by_user: true });
-  const { error } = ids && ids.length > 0 ? await q.in("id", ids) : await q.eq("seen_by_user", false);
+  const { error } = ids ? await q.in("id", ids) : await q.eq("seen_by_user", false);
   if (error) throw error;
 }
 
@@ -233,11 +257,18 @@ interface ReplyRow {
 /**
  * Normalize one source's replies into rows, deduped on `reply_id`.
  *
- * The dedupe is not cosmetic: a single insert payload holding two rows with
- * the same conflict target makes Postgres raise "ON CONFLICT DO UPDATE command
- * cannot affect row a second time", and it defeats `ignoreDuplicates` besides.
- * Facebook in particular falls back to the array index as a comment id when
- * the vendor gives none, so collisions inside one batch are real.
+ * The dedupe is in memory because the collisions are real: Facebook falls back
+ * to the array index as a comment id when the vendor gives none
+ * (lib/sources/socialapis.ts), so one batch can carry the same `reply_id`
+ * twice.
+ *
+ * It is NOT load-bearing for correctness, and the usual claim about it is
+ * wrong — tested against this database: an `ignoreDuplicates` upsert carrying
+ * two rows with the same conflict target inserts one and raises nothing,
+ * because PostgREST emits ON CONFLICT DO NOTHING and only DO UPDATE has the
+ * "cannot affect row a second time" restriction. What the dedupe buys is a
+ * smaller payload, an accurate `stored` count, and safety if this ever moves
+ * to DO UPDATE.
  */
 function toRows(savedPostId: string, replies: ScrapedPost[], baseline: boolean): ReplyRow[] {
   const byReplyId = new Map<string, ReplyRow>();
@@ -287,20 +318,60 @@ async function insertRows(rows: ReplyRow[]): Promise<number> {
 }
 
 /**
- * Stamp a post as polled. `last_polled_at` moves on every attempt, success or
- * failure, because it is the cooldown clock and a post whose source is broken
- * must not be re-called on every page open. `baselined_at` moves only when the
- * comment tree was actually stored, so an outage cannot silently consume a
- * post's one baseline and leave the next successful poll treating the whole
- * pre-existing tree as new.
+ * Claim a post for this run, atomically, immediately before it is fetched.
+ *
+ * This is the only thing standing between Hon and a doubled Facebook bill.
+ * Two overlapping runs — two tabs, or a reload while a slow Facebook lane is
+ * still going — each do their own eligibility read, and without a claim they
+ * both see the same oldest-eligible posts and both pay for them; the per-run
+ * cap is an in-memory counter and cannot see the other run at all. Here the
+ * stamp IS the claim: `last_polled_at` moves before the call goes out, under a
+ * WHERE that still requires the row to be eligible, so whichever run's UPDATE
+ * commits first is the only one that gets the row back. The loser is told
+ * nothing was updated and skips it.
+ *
+ * Claiming before the fetch also means a post whose source is down or whose
+ * URL the vendor cannot read enters the cooldown like any other — it is not
+ * re-called on every page open with no backoff, which on Facebook is a bill
+ * rather than just noise (measured 2026-09-22 on a real saved group post
+ * aborting at the vendor's 5s cap).
+ *
+ * Returns false when another run already had it.
  */
-async function markPolled(id: string, baselined: boolean): Promise<void> {
-  const now = new Date().toISOString();
-  const { error } = await getSupabase()
+async function claimPost(id: string, claimCutoffIso: string): Promise<boolean> {
+  const { data, error } = await getSupabase()
     .from("saved_posts")
-    .update(baselined ? { last_polled_at: now, baselined_at: now } : { last_polled_at: now })
-    .eq("id", id);
+    .update({ last_polled_at: new Date().toISOString() })
+    .eq("id", id)
+    .or(`last_polled_at.is.null,last_polled_at.lt.${claimCutoffIso}`)
+    .select("id");
   if (error) throw error;
+  return (data ?? []).length > 0;
+}
+
+/**
+ * Record that this post's existing comment tree has been stored, so the next
+ * poll treats what it finds as NEW rather than baselining a second time.
+ *
+ * Retried once, and loud when it still fails, because this is the one write
+ * whose loss is silent: the tree is already in the table marked seen, so a
+ * lost stamp makes the next run baseline again and quietly file every reply
+ * that arrived in between as already-read. Nobody would ever notice.
+ */
+async function stampBaselined(id: string, stats: PollStats, label: string): Promise<void> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const { error } = await getSupabase()
+      .from("saved_posts")
+      .update({ baselined_at: new Date().toISOString() })
+      .eq("id", id);
+    if (!error) return;
+    if (attempt === 1) {
+      stats.errors.push(
+        `${label}: stored the existing replies but could not record the baseline (${error.message}). ` +
+          `The next check will baseline this post again, so replies arriving before then may not be flagged as new.`,
+      );
+    }
+  }
 }
 
 /**
@@ -308,9 +379,17 @@ async function markPolled(id: string, baselined: boolean): Promise<void> {
  * rate-limited source or an unreachable store must cost that one post and not
  * the rest of the run.
  */
-async function pollOne(row: SavedRow, stats: PollStats): Promise<void> {
+async function pollOne(row: SavedRow, stats: PollStats, claimCutoffIso: string): Promise<void> {
   const platform = row.platform as Pollable;
+  const label = `${row.platform} ${row.url}`;
   try {
+    // Claim first, call second. Nothing below may run for a post another
+    // concurrent run already took — on Facebook that is a second credit for
+    // the same comments.
+    if (!(await claimPost(row.id, claimCutoffIso))) {
+      stats.skipped += 1;
+      return;
+    }
     const post = syntheticPost(row);
     // Counted BEFORE the call, not after. This number exists so Facebook spend
     // is readable, and a SocialAPIs call that is abandoned at the timeout has
@@ -346,27 +425,46 @@ async function pollOne(row: SavedRow, stats: PollStats): Promise<void> {
     if (baseline) stats.baselined += stored;
     else stats.inserted += stored;
 
-    await markPolled(row.id, true);
+    // Only after the rows are actually in the table. Stamping before the
+    // insert would, on a failed insert, leave a post marked baselined with
+    // nothing stored — and the next run would then file its entire
+    // pre-existing comment tree as unread.
+    if (baseline) await stampBaselined(row.id, stats, label);
   } catch (err) {
-    stats.errors.push(`${row.platform} ${row.url}: ${(err as Error).message}`.replace(/\s+/g, " "));
-    // The post still enters the cooldown. A source that is down or a URL the
-    // vendor cannot read would otherwise be retried on EVERY page open with no
-    // backoff — and on Facebook an abandoned in-flight call still charges its
-    // credit, so that is a bill, not just noise. `baselined_at` is left alone,
-    // so the first poll that actually stores something still baselines.
-    // Measured 2026-09-22: a real saved Facebook group post was aborting at
-    // the vendor's 5s cap and was re-called on every single reload.
-    await markPolled(row.id, false).catch((e) => {
-      stats.errors.push(`${row.platform} ${row.url}: could not record the attempt: ${(e as Error).message}`);
-    });
+    // `last_polled_at` was already moved by the claim, so a post whose source
+    // is failing sits out the cooldown instead of being retried on every page
+    // open. `baselined_at` is untouched, so the first run that actually stores
+    // something still baselines it.
+    stats.errors.push(`${label}: ${(err as Error).message}`.replace(/\s+/g, " "));
   }
 }
 
-/** Poll one platform's posts serially, in the order they were handed over. */
-async function pollLane(rows: SavedRow[], stats: PollStats, gapMs = 0): Promise<void> {
-  for (const row of rows) {
-    await pollOne(row, stats);
-    if (gapMs) await sleep(gapMs);
+/**
+ * Poll one platform's posts serially, in the order they were handed over,
+ * until the run's wall-clock budget is gone.
+ *
+ * The deadline is checked BEFORE starting a post, never during one, so a call
+ * already in flight is allowed to finish — abandoning a SocialAPIs call does
+ * not refund its credit, so cutting one off mid-flight would buy comments
+ * nobody ever sees. The courtesy gap is skipped after the last post, which is
+ * where the old version spent a pointless 1.5s per lane.
+ */
+async function pollLane(
+  rows: SavedRow[],
+  stats: PollStats,
+  deadline: number,
+  claimCutoffIso: string,
+  gapMs = 0,
+): Promise<void> {
+  for (let i = 0; i < rows.length; i++) {
+    if (Date.now() >= deadline) {
+      // Nothing was claimed for these, so their `last_polled_at` is untouched
+      // and the next run finds them at the front of the oldest-first order.
+      stats.skipped += rows.length - i;
+      return;
+    }
+    await pollOne(rows[i], stats, claimCutoffIso);
+    if (gapMs && i < rows.length - 1) await sleep(gapMs);
   }
 }
 
@@ -395,7 +493,15 @@ export async function pollSavedPosts({ force = false }: { force?: boolean } = {}
     .order("last_polled_at", { ascending: true, nullsFirst: true });
   if (error) throw error;
 
+  // Two cutoffs, on purpose. `cutoff` is the ordinary cooldown, applied in
+  // memory so a run does not attempt a claim on every saved post. The claim
+  // cutoff is what the per-post UPDATE actually enforces, and a forced run
+  // relaxes it only as far as FORCE_CLAIM_FLOOR_MS — "refresh" may ignore the
+  // ten-minute cooldown, but it may not let two overlapping runs pay twice.
   const cutoff = Date.now() - POLL_COOLDOWN_MS;
+  const claimCutoffIso = new Date(
+    Date.now() - (force ? FORCE_CLAIM_FLOOR_MS : POLL_COOLDOWN_MS),
+  ).toISOString();
   const lanes: Record<Pollable, SavedRow[]> = {
     reddit: [],
     hackernews: [],
@@ -422,13 +528,15 @@ export async function pollSavedPosts({ force = false }: { force?: boolean } = {}
   }
 
   // Same shape as the discovery reply pass: serial inside a lane, lanes
-  // concurrent. Reddit keeps its 1.5s courtesy gap; Facebook is serial so a
-  // run can never have more than one billable call in flight at a time.
+  // concurrent. Reddit keeps its 1.5s courtesy gap. Facebook is serial, so
+  // THIS run never has more than one billable call in flight; a CONCURRENT run
+  // is held off by the per-post claim in `pollOne`, not by this.
+  const deadline = Date.now() + POLL_BUDGET_MS;
   await Promise.all([
-    pollLane(lanes.reddit, stats, REDDIT_COURTESY_MS),
-    pollLane(lanes.hackernews, stats),
-    pollLane(lanes.stackexchange, stats),
-    pollLane(lanes.facebook, stats),
+    pollLane(lanes.reddit, stats, deadline, claimCutoffIso, REDDIT_COURTESY_MS),
+    pollLane(lanes.hackernews, stats, deadline, claimCutoffIso),
+    pollLane(lanes.stackexchange, stats, deadline, claimCutoffIso),
+    pollLane(lanes.facebook, stats, deadline, claimCutoffIso),
   ]);
 
   const calls = POLLABLE.filter((p) => p !== "facebook")
