@@ -1,0 +1,13 @@
+# Hon-SMA uptime check + Supabase keep-alive.
+# Install on the VPS (the box that already runs hon-sma-worker under pm2):
+#   crontab -l 2>/dev/null | cat - scripts/healthcheck.cron | crontab -
+#
+# Every 10 minutes. That is far more often than the ~7-day Supabase idle-pause
+# threshold, so the project can never fall asleep again, and it catches an
+# outage within 10 minutes instead of never.
+#
+# Set ALERT_WEBHOOK to get told when something breaks. ntfy.sh needs no signup:
+# pick a long random topic name, subscribe in the ntfy phone app, then use
+#   ALERT_WEBHOOK=https://ntfy.sh/<your-random-topic>
+# Leave it unset and the check still runs and still logs, it just stays quiet.
+*/10 * * * * cd /home/devjoy/Hon-SMA && set -a && . ./.env && set +a && /usr/bin/env node scripts/healthcheck.mjs >> /var/log/hon-sma-health.log 2>&1
