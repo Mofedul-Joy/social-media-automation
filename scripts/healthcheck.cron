@@ -10,4 +10,11 @@
 # pick a long random topic name, subscribe in the ntfy phone app, then use
 #   ALERT_WEBHOOK=https://ntfy.sh/<your-random-topic>
 # Leave it unset and the check still runs and still logs, it just stays quiet.
-*/10 * * * * cd /home/devjoy/Hon-SMA && set -a && . ./.env && set +a && /usr/bin/env node scripts/healthcheck.mjs >> /var/log/hon-sma-health.log 2>&1
+# INSTALLED AND VERIFIED ON THE VPS 2026-09-22. Two things the obvious line got
+# wrong, both found by running it under a stripped cron environment:
+#  1. node is installed under nvm, which is NOT on cron's minimal PATH, so a bare
+#     `/usr/bin/env node` died with "node: command not found". Hence the PATH prefix.
+#  2. /var/log is not writable by devjoy and there is no passwordless sudo, so the
+#     log lives in the home directory instead.
+# Node path is pinned to the installed version. An nvm upgrade WILL break this line.
+*/10 * * * * cd /home/devjoy/Hon-SMA && set -a && . ./.env && set +a && PATH=/home/devjoy/.nvm/versions/node/v24.18.0/bin:$PATH /usr/bin/env node scripts/healthcheck.mjs >> /home/devjoy/hon-sma-health.log 2>&1
