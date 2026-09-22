@@ -23,7 +23,7 @@ const SELLER_PATTERNS: RegExp[] = [
   /\bclick (the )?link\b/i,
   /\blink in bio\b/i,
   /\bread more\b/i,
-  /\bcheck out my\b/i,
+  /\bcheck (out )?my\b/i,
   /\bvisit my\b/i,
   /\bfollow me\b/i,
   /\blimited spots\b/i,
@@ -34,6 +34,11 @@ const SELLER_PATTERNS: RegExp[] = [
   /\bi (can|could) help (you )?with\b/i,
   /\bi specialize in\b/i,
   /\bi offer\b/i,
+  // "I help businesses and agencies build systems" and "check my profile or
+  // BIO to learn more about my services" both reached the top of a real
+  // result list as leads on 2026-09-22. Neither matched anything above.
+  /\bi help\b/i,
+  /\bmy services\b/i,
   /\bwe (offer|provide|specialize)\b/i,
   /\bour (agency|team|service)\b/i,
   /\bfractional cmo\b/i,
@@ -54,7 +59,14 @@ export function isPromotionalPost(post: ScrapedPost): boolean {
  * read as a pitch.
  */
 const BUYER_SIGNAL_PATTERNS: RegExp[] = [
-  /\?/,
+  // Was a bare /\?/, which made every post containing a question mark a lead.
+  // Marketing copy is full of rhetorical hooks ("Struggling with lead gen?"),
+  // so on 2026-09-22 both results of a live search ranked top as buyers on
+  // nothing but punctuation. Require an actual interrogative clause: a wh-word
+  // or auxiliary verb, then a question mark within the same sentence.
+  // Known gap: a second-person hook ("Do you want more leads?") still matches.
+  // Narrowing that needs a call on what gets suppressed, so it is left open.
+  /\b(who|what|when|where|why|how|which|can|could|should|would|does|do|did|is|are|any(?:one|body))\b[^.!?\n]{0,120}\?/i,
   /\bi'?m (struggling|frustrated|stuck|having trouble)\b/i,
   /\bi (need|could use) (some )?help\b/i,
   /\bcan (anyone|someone|you guys|you all)\b/i,
