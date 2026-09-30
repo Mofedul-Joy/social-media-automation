@@ -37,7 +37,16 @@ export const MAX_RESULTS = 5;
 // budget raised to match, plus margin — still well inside the route's 60s
 // maxDuration since sources run concurrently, not added end to end.
 const MAX_LIVE_SUBREDDITS = 2;
-const REDDIT_BUDGET_MS = 40_000;
+// Ticket 14, 2026-09-30, PROVISIONAL pending operator review: 1 query
+// phrasing was starving real supply (newest matching post was 111 days old
+// for a real topic even at the 30-day-widened freshness window). Widened to
+// 2 phrasings, same shape as Facebook's fbQueries below. Worst case is
+// 2 queries x 2 subreddits = 4 serial calls, and a single 422-rate-limited
+// call can itself retry for ~9s of backoff on top of its own ~13s -- a real
+// live test hit two 422s and still finished in 51.2s. 55s leaves 5s margin
+// under the route's 60s maxDuration; searchReddit's internal deadline check
+// (between calls, not mid-retry) is a second line of defense, not the only one.
+const REDDIT_BUDGET_MS = 55_000;
 /**
  * Facebook has two sources, and which one runs depends only on whether any
  * group URLs are configured:
@@ -252,14 +261,19 @@ export async function discoverPosts(
   // phrasing (an earlier version kept it for HN/Stack Exchange "for volume";
   // dropped after client feedback that literal-keyword results still leaked
   // through). `primaryIntentQuery` wraps the topic in the single best
-  // struggling/recommendation-seeking phrasing for the sources that can only
-  // afford one query (Reddit's rate courtesy, Facebook's paid credit); the
-  // free, fast sources (HN, Stack Exchange) get six buyer-phrased variants
-  // instead of one, since there's no cost reason to hold back there. Raw
-  // supply per topic was the bottleneck (2-4 candidates before filtering, so
-  // 5354769's buyer-signal filter often had nothing left to keep) -- more
-  // query variants is the direct fix. See lib/intent.ts.
+  // struggling/recommendation-seeking phrasing; the free, fast sources (HN,
+  // Stack Exchange) get six buyer-phrased variants instead of one, since
+  // there's no cost reason to hold back there. Raw supply per topic was the
+  // bottleneck (2-4 candidates before filtering, so 5354769's buyer-signal
+  // filter often had nothing left to keep) -- more query variants is the
+  // direct fix. See lib/intent.ts.
   const buyerQuery = primaryIntentQuery(q, ctx);
+  // Ticket 14, 2026-09-30, PROVISIONAL: Reddit gets a second phrasing too now
+  // (was 1, "the sources that can only afford one query" above is now stale
+  // for Reddit specifically -- see the REDDIT_BUDGET_MS comment for the time
+  // cost). `buyerQuery` stays first since it's the hand-picked best single
+  // frame; the second comes from the general frame list, deduped against it.
+  const redditQueries = Array.from(new Set([buyerQuery, ...intentQueriesFor(q, ctx, 3)])).slice(0, 2);
   const hnSeQueries = intentQueriesFor(q, ctx, 6);
   const fbQueries = intentQueriesFor(q, ctx, 2);
 
@@ -284,10 +298,14 @@ export async function discoverPosts(
     );
   }
   if (reddit?.enabled && (reddit.subreddits?.length ?? 0) > 0) {
+    const redditDeadline = Date.now() + REDDIT_BUDGET_MS;
     searches.push(
       Promise.race([
         safeSearch("reddit", () =>
-          searchReddit(buyerQuery, { subreddits: reddit.subreddits!.slice(0, MAX_LIVE_SUBREDDITS) }),
+          searchReddit(redditQueries, {
+            subreddits: reddit.subreddits!.slice(0, MAX_LIVE_SUBREDDITS),
+            deadline: redditDeadline,
+          }),
         ),
         new Promise<ScrapedPost[]>((r) => setTimeout(() => r([]), REDDIT_BUDGET_MS)),
       ]),

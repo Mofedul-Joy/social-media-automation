@@ -84,23 +84,35 @@ async function searchOne(query: string, subreddit: string): Promise<ScrapedPost[
  * This is a free, volunteer-run archive, not a paid vendor with dedicated
  * capacity — the 1.5s gap between calls is deliberate goodwill, not just
  * throughput tuning.
+ *
+ * `query` also accepts an array (ticket 14, 2026-09-30, provisional pending
+ * operator review): one phrasing was starving real supply on some topics, so
+ * the caller can now pass a few. Every (query, subreddit) pair is still one
+ * serial call with the same 1.5s courtesy gap -- more queries costs wall
+ * time, not vendor load. `deadline` (epoch ms) lets a caller under a hard
+ * time budget stop early and keep whatever it already collected, instead of
+ * an all-or-nothing external race that discards a run in progress.
  */
 export async function searchReddit(
-  query: string,
-  { subreddits = [] }: { subreddits?: string[] } = {},
+  query: string | string[],
+  { subreddits = [], deadline }: { subreddits?: string[]; deadline?: number } = {},
 ): Promise<SourceResult> {
+  const queries = Array.isArray(query) ? query : [query];
   if (subreddits.length === 0) {
     return { posts: [], unitsCharged: 0, errors: ["arctic shift needs at least one configured subreddit"] };
   }
   const posts: ScrapedPost[] = [];
   const errors: string[] = [];
-  for (const sub of subreddits) {
-    try {
-      posts.push(...(await searchOne(query, sub)));
-    } catch (err) {
-      errors.push(`r/${sub} "${query}": ${(err as Error).message}`);
+  outer: for (const q of queries) {
+    for (const sub of subreddits) {
+      if (deadline !== undefined && Date.now() > deadline) break outer;
+      try {
+        posts.push(...(await searchOne(q, sub)));
+      } catch (err) {
+        errors.push(`r/${sub} "${q}": ${(err as Error).message}`);
+      }
+      await sleep(1500);
     }
-    await sleep(1500);
   }
   return { posts, unitsCharged: 0, errors };
 }
