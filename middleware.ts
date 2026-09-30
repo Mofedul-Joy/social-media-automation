@@ -1,56 +1,47 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { SESSION_COOKIE, dashboardCredentials, verifySessionToken } from "@/lib/auth";
 
 /**
- * Gate the entire dashboard behind HTTP Basic Auth. This is the safety boundary
- * for the approval console: without it, anyone who can reach the URL could
- * approve comments (which post to the client's real social accounts) or trigger
- * discovery (which spends API credits). Credentials come from env and are never
- * hardcoded. If no password is configured we fail closed (503) rather than open.
+ * Gate the entire dashboard behind a signed session cookie set by /login. This
+ * is the safety boundary for the approval console: without it, anyone who can
+ * reach the URL could approve comments (which post to the client's real
+ * social accounts) or trigger discovery (which spends API credits).
+ * Credentials come from env and are never hardcoded. If no password is
+ * configured we fail closed (503) rather than open — including for /login
+ * itself, since there is nothing valid to log in with.
  */
 
-const REALM = 'Engagement Console';
+const PUBLIC_PATHS = new Set(["/login"]);
+const PUBLIC_PREFIXES = ["/api/auth/"];
 
-function unauthorized(message: string, status = 401): NextResponse {
-  const res = new NextResponse(message, { status });
-  if (status === 401) res.headers.set('WWW-Authenticate', `Basic realm="${REALM}"`);
-  return res;
+function isPublic(pathname: string): boolean {
+  if (PUBLIC_PATHS.has(pathname)) return true;
+  return PUBLIC_PREFIXES.some((prefix) => pathname.startsWith(prefix));
 }
 
-export function middleware(req: NextRequest): NextResponse {
-  const user = process.env.DASHBOARD_USER || 'admin';
-  const pass = process.env.DASHBOARD_PASSWORD;
+function serviceUnavailable(message: string): NextResponse {
+  return new NextResponse(message, { status: 503 });
+}
 
+export async function middleware(req: NextRequest): Promise<NextResponse> {
   // Fail closed: an unconfigured console must not be usable.
-  if (!pass) {
-    return unauthorized(
+  if (!dashboardCredentials()) {
+    return serviceUnavailable(
       'Dashboard auth is not configured. Set DASHBOARD_PASSWORD (and optionally DASHBOARD_USER) in the environment.',
-      503,
     );
   }
 
-  const header = req.headers.get('authorization') || '';
-  if (header.startsWith('Basic ')) {
-    try {
-      const decoded = atob(header.slice(6));
-      const idx = decoded.indexOf(':');
-      const givenUser = decoded.slice(0, idx);
-      const givenPass = decoded.slice(idx + 1);
-      if (safeEqual(givenUser, user) && safeEqual(givenPass, pass)) {
-        return NextResponse.next();
-      }
-    } catch {
-      // fall through to 401
-    }
-  }
-  return unauthorized('Authentication required.');
-}
+  const { pathname } = req.nextUrl;
+  if (isPublic(pathname)) return NextResponse.next();
 
-/** Length-aware constant-time-ish comparison to avoid trivial timing leaks. */
-function safeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  return diff === 0;
+  const token = req.cookies.get(SESSION_COOKIE)?.value;
+  if (await verifySessionToken(token)) return NextResponse.next();
+
+  const url = req.nextUrl.clone();
+  url.pathname = "/login";
+  url.search = "";
+  url.searchParams.set("from", pathname);
+  return NextResponse.redirect(url);
 }
 
 export const config = {

@@ -14,6 +14,7 @@ import {
   PenLine,
   Bookmark,
   BarChart3,
+  LogOut,
 } from "lucide-react";
 import type { BusinessContext, Platform, ScrapedPost } from "@/lib/types";
 import { CATEGORY_BUYER, CATEGORY_GENERAL } from "@/lib/types";
@@ -501,6 +502,16 @@ export default function Home() {
             <PenLine className="w-4 h-4" strokeWidth={2.2} />
             Compose
           </a>
+          <button
+            onClick={async () => {
+              await fetch("/api/auth/logout", { method: "POST" });
+              window.location.href = "/login";
+            }}
+            title="Log out"
+            className="btn inline-flex items-center gap-2 text-sm font-medium text-[color:var(--muted)] hover:text-[color:var(--text)] glass rounded-full px-4 py-2 transition-colors"
+          >
+            <LogOut className="w-4 h-4" strokeWidth={2.2} />
+          </button>
         </div>
       </header>
 
